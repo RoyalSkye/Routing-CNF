@@ -37,6 +37,7 @@ class TSPTrainer:
         else:
             device = torch.device('cpu')
             torch.set_default_tensor_type('torch.FloatTensor')
+        self.device = device
 
         # Main Components
         self.num_expert = self.trainer_params['num_expert']
@@ -181,6 +182,7 @@ class TSPTrainer:
                         score, loss = self._train_one_batch(self.models[j], adv_data)  # (batch), (batch)
                         scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                         losses.append(loss)
+                    # print(scores)  # the scores will not be the same even at the beginning, since the policy is stochastic
                     self._update_model(scores, losses, type="ins_exp_choice")
             else:
                 raise NotImplementedError
@@ -269,6 +271,7 @@ class TSPTrainer:
 
     def _fast_val(self, model, data=None, path=None, offset=0, val_episodes=1000, aug_factor=1):
         data = torch.Tensor(load_dataset(path, disable_print=True)[offset: offset + val_episodes]) if data is None else data
+        data = data.to(self.device)
         env = Env(**{'problem_size': data.size(1), 'pomo_size': data.size(1)})
         batch_size = data.size(0)
 
@@ -298,7 +301,7 @@ class TSPTrainer:
         for val_path in paths:
             no_aug_score_list, aug_score_list, no_aug_gap_list, aug_gap_list = [], [], [], []
             no_aug_scores, aug_scores = torch.zeros(val_episodes, 0), torch.zeros(val_episodes, 0)
-            opt_sol = load_dataset(os.path.join(dir, "concorde_{}".format(val_path)))[: val_episodes]
+            opt_sol = load_dataset(os.path.join(dir, "concorde_{}".format(val_path)), disable_print=True)[: val_episodes]
             opt_sol = [i[0] for i in opt_sol]
             for i in range(self.num_expert):
                 no_aug_score, aug_score = self._fast_val(self.models[i], path=os.path.join(dir, val_path), val_episodes=val_episodes, aug_factor=8)

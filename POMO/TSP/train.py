@@ -38,7 +38,7 @@ optimizer_params = {
         'weight_decay': 1e-6
     },
     'scheduler': {
-        'milestones': [50, ],
+        'milestones': [51, ],
         'gamma': 0.1
     }
 }
@@ -47,7 +47,7 @@ trainer_params = {
     'use_cuda': USE_CUDA,
     'cuda_device_num': CUDA_DEVICE_NUM,
     'seed': 1234,
-    'method': 'ours',
+    'method': 'ours',  # choose from ['ours', 'baseline', 'baseline_hac']
     'epochs': 100,
     'pretrain_epochs': 3000,
     'train_episodes': 100 * 1000,
@@ -103,10 +103,11 @@ def main():
 
     seed_everything(trainer_params['seed'])
 
-    if trainer_params['method'] == "baseline":
-        trainer = Trainer_baseline(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
-    else:
+    print(">> Starting {} Training".format(trainer_params['method']))
+    if trainer_params['method'] == "ours":
         trainer = Trainer(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
+    else:
+        trainer = Trainer_baseline(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
 
     copy_all_src(trainer.result_folder)
 

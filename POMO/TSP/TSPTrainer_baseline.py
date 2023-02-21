@@ -37,6 +37,7 @@ class TSPTrainer:
         else:
             device = torch.device('cpu')
             torch.set_default_tensor_type('torch.FloatTensor')
+        self.device = device
 
         # Main Components
         self.num_expert = self.trainer_params['num_expert']
@@ -171,8 +172,21 @@ class TSPTrainer:
                 eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max']), 1)[0]
                 for i in range(self.num_expert):
                     adv_data = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'], return_opt=False)
-                    score, loss = self._train_one_batch(self.models[i], adv_data)  # (batch), (batch)
-                    avg_score, avg_loss = score.mean().item(), loss.mean()
+
+                    if self.trainer_params['method'] == "baseline":
+                        score, loss = self._train_one_batch(self.models[i], adv_data)  # (batch), (batch)
+                        avg_score, avg_loss = score.mean().item(), loss.mean()
+                    elif self.trainer_params['method'] == "baseline_hac":
+                        """
+                            Reimplementation of HAC, refer to "Learning to Solve Travelling Salesman Problem with Hardness-Adaptive Curriculum" - AAAI 2022
+                            https://github.com/wondergo2017/TSP-HAC
+                        """
+                        hac_data = torch.cat((nat_data, adv_data), dim=0)
+                        hac_data = hac_data[torch.randperm(hac_data.size(0))[:batch_size]]
+                        avg_score, avg_loss = self._hac_train_one_batch(self.models[i], hac_data, epoch=epoch)
+                    else:
+                        raise NotImplementedError
+
                     self.optimizers[i].zero_grad()
                     avg_loss.backward()
                     self.optimizers[i].step()
@@ -223,8 +237,55 @@ class TSPTrainer:
 
         return -max_pomo_reward.float().detach(), loss.mean(1)  # (batch), (batch)
 
+    def _hac_train_one_batch(self, model, data, epoch=0):
+        """
+            Only for one forward pass.
+        """
+        model.train()
+        batch_size = data.size(0)
+        self.env.load_problems(batch_size, problems=data, aug_factor=1)
+        reset_state, _, _ = self.env.reset()
+        model.pre_forward(reset_state)
+
+        prob_list = torch.zeros(size=(batch_size, self.env.pomo_size, 0))
+        # shape: (batch, pomo, 0~problem)
+
+        # POMO Rollout
+        ###############################################
+        state, reward, done = self.env.pre_step()
+        while not done:
+            selected, prob = model(state)
+            # shape: (batch, pomo)
+            state, reward, done = self.env.step(selected)
+            prob_list = torch.cat((prob_list, prob[:, :, None]), dim=2)
+
+        # Loss
+        ###############################################
+        advantage = reward - reward.float().mean(dim=1, keepdims=True)
+        # shape: (batch, pomo)
+        log_prob = prob_list.log().sum(dim=2)
+        # size = (batch, pomo)
+        loss = -advantage * log_prob  # Minus Sign: To Increase REWARD
+        # shape: (batch, pomo)
+
+        # Score
+        ###############################################
+        max_pomo_reward, idx = reward.max(dim=1)  # get best results from pomo
+        # score_mean = -max_pomo_reward.float().mean()  # negative sign to make positive value
+
+        # Reweighting by HAC
+        loss = loss.mean(1)
+        w = ((max_pomo_reward / reward.float().mean(dim=1)) * log_prob[torch.arange(batch_size), idx]).detach()
+        t = torch.FloatTensor([20 - (epoch % 20)]).to(self.device)
+        w = torch.tanh(w) / t
+        w = torch.softmax(w, dim=0)
+        loss = (w * loss).sum()
+
+        return -max_pomo_reward.float().detach().mean().item(), loss  # (batch), (batch)
+
     def _fast_val(self, model, data=None, path=None, offset=0, val_episodes=1000, aug_factor=1):
         data = torch.Tensor(load_dataset(path, disable_print=True)[offset: offset + val_episodes]) if data is None else data
+        data = data.to(self.device)
         env = Env(**{'problem_size': data.size(1), 'pomo_size': data.size(1)})
         batch_size = data.size(0)
 
@@ -254,7 +315,7 @@ class TSPTrainer:
         for val_path in paths:
             no_aug_score_list, aug_score_list, no_aug_gap_list, aug_gap_list = [], [], [], []
             no_aug_scores, aug_scores = torch.zeros(val_episodes, 0), torch.zeros(val_episodes, 0)
-            opt_sol = load_dataset(os.path.join(dir, "concorde_{}".format(val_path)))[: val_episodes]
+            opt_sol = load_dataset(os.path.join(dir, "concorde_{}".format(val_path)), disable_print=True)[: val_episodes]
             opt_sol = [i[0] for i in opt_sol]
             for i in range(self.num_expert):
                 no_aug_score, aug_score = self._fast_val(self.models[i], path=os.path.join(dir, val_path), val_episodes=val_episodes, aug_factor=8)
