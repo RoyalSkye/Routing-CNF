@@ -69,8 +69,8 @@ def main():
     create_logger(**logger_params)
     _print_config()
 
+    avg_gaps, avg_aug_gaps = [], []
     all_scores, all_aug_scores = torch.zeros(tester_params['test_episodes'], 0), torch.zeros(tester_params['test_episodes'], 0)
-
     if not PARALLEL:
         # a. test all experts in sequential (on the same GPU)
         for i in range(tester_params['num_expert']):
@@ -83,8 +83,10 @@ def main():
             all_aug_scores = torch.cat((all_aug_scores, aug_scores.unsqueeze(1)), dim=1)
             gaps = [(s - opt_sol[j]) / opt_sol[j] * 100 for j, s in enumerate(scores.tolist())]
             aug_gaps = [(s - opt_sol[j]) / opt_sol[j] * 100 for j, s in enumerate(aug_scores.tolist())]
-            print(">> Model {}: Scores {:.4f} -> x8 Aug Scores {:.4f}; Gaps {:.4f}% -> x8 Aug Gaps {:.4f}%"
-                  .format(i, scores.mean().item(), aug_scores.mean().item(), sum(gaps)/len(gaps), sum(aug_gaps)/len(aug_gaps)))
+            avg_gaps.append(sum(gaps)/len(gaps))
+            avg_aug_gaps.append(sum(aug_gaps)/len(aug_gaps))
+            print(">> Model {}: Scores {:.4f} -> x8 Aug Scores {:.4f}; Gaps {:.4f}% -> x8 Aug Gaps {:.4f}%".format(
+                i, scores.mean().item(), aug_scores.mean().item(), sum(gaps)/len(gaps), sum(aug_gaps)/len(aug_gaps)))
     else:
         # b. test all experts in parallel (on multiple GPUs)
         res_list = []
@@ -104,16 +106,24 @@ def main():
             all_aug_scores = torch.cat((all_aug_scores, aug_scores.unsqueeze(1)), dim=1)
             gaps = [(s - opt_sol[j]) / opt_sol[j] * 100 for j, s in enumerate(scores.tolist())]
             aug_gaps = [(s - opt_sol[j]) / opt_sol[j] * 100 for j, s in enumerate(aug_scores.tolist())]
-            print(">> Model {}: Scores {:.4f} -> x8 Aug Scores {:.4f}; Gaps {:.4f}% -> x8 Aug Gaps {:.4f}%"
-                  .format(i, scores.mean().item(), aug_scores.mean().item(), sum(gaps) / len(gaps), sum(aug_gaps) / len(aug_gaps)))
+            avg_gaps.append(sum(gaps) / len(gaps))
+            avg_aug_gaps.append(sum(aug_gaps) / len(aug_gaps))
+            print(">> Model {}: Scores {:.4f} -> x8 Aug Scores {:.4f}; Gaps {:.4f}% -> x8 Aug Gaps {:.4f}%".format(
+                i, scores.mean().item(), aug_scores.mean().item(), sum(gaps) / len(gaps), sum(aug_gaps) / len(aug_gaps)))
 
     best_scores, _ = all_scores.max(1)
     best_aug_scores, _ = all_aug_scores.max(1)
+    avg_scores, avg_aug_scores = all_scores.mean(0).tolist(), all_aug_scores.mean(0).tolist()
     if opt_sol is not None:
         best_gaps = [(s - opt_sol[j]) / opt_sol[j] * 100 for j, s in enumerate(best_scores.tolist())]
-        print(">> After Collaboration: Scores {:.4f} Gaps {:.4f}%".format(best_scores.mean().item(), sum(best_gaps)/len(best_gaps)))
         best_aug_gaps = [(s - opt_sol[j]) / opt_sol[j] * 100 for j, s in enumerate(best_aug_scores.tolist())]
-        print(">> After Collaboration: x8 Aug Scores {:.4f} x8 Aug Gaps {:.4f}%".format(best_aug_scores.mean().item(), sum(best_aug_gaps)/len(best_aug_gaps)))
+
+        print(">> Val Score on {}: NO_AUG_Score: {.:4f} -> Min {:.4f} Col {:.4f}, AUG_Score: {:.4f} -> Min {:.4f} -> Col {:.4f}".format(
+            os.path.split(tester_params['test_set_path'])[-1], avg_scores, min(avg_scores), best_scores.mean().item(),
+            avg_aug_scores, min(avg_aug_scores), best_aug_scores.mean().item()))
+        print(">> Val Score on {}: NO_AUG_Gap: {:.4f} -> Min {:.4f}% -> Col {:.4f}%, AUG_Gap: {:.4f} -> Min {:.4f}% -> Col {:.4f}%".format(
+            os.path.split(tester_params['test_set_path'])[-1], avg_gaps, min(avg_gaps), sum(best_gaps)/len(best_gaps),
+            avg_aug_gaps, min(avg_aug_gaps), sum(best_aug_gaps)/len(best_aug_gaps)))
     else:
         print(best_scores)
         print(best_aug_scores)

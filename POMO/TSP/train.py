@@ -6,6 +6,7 @@ import logging
 from utils.utils import create_logger, copy_all_src
 from utils.functions import seed_everything
 from TSPTrainer import TSPTrainer as Trainer
+from TSPTrainer_baseline import TSPTrainer as Trainer_baseline
 
 DEBUG_MODE = False
 USE_CUDA = not DEBUG_MODE
@@ -37,7 +38,7 @@ optimizer_params = {
         'weight_decay': 1e-6
     },
     'scheduler': {
-        'milestones': [900, ],
+        'milestones': [50, ],
         'gamma': 0.1
     }
 }
@@ -46,14 +47,15 @@ trainer_params = {
     'use_cuda': USE_CUDA,
     'cuda_device_num': CUDA_DEVICE_NUM,
     'seed': 1234,
-    'epochs': 1000,
+    'method': 'ours',
+    'epochs': 100,
     'pretrain_epochs': 3000,
     'train_episodes': 100 * 1000,
     'num_expert': 3,
     'train_batch_size': 64,
     'logging': {
-        'model_save_interval': 100,
-        'img_save_interval': 100,
+        'model_save_interval': 10,
+        'img_save_interval': 10,
         'log_image_params_1': {
             'json_foldername': 'log_image_style',
             'filename': 'general.json'
@@ -101,7 +103,10 @@ def main():
 
     seed_everything(trainer_params['seed'])
 
-    trainer = Trainer(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
+    if trainer_params['method'] == "baseline":
+        trainer = Trainer_baseline(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
+    else:
+        trainer = Trainer(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
 
     copy_all_src(trainer.result_folder)
 
