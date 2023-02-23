@@ -5,9 +5,11 @@ from logging import getLogger
 from TSPEnv import TSPEnv as Env
 from TSPModel import TSPModel as Model
 from TSProblemDef import get_random_problems, generate_x_adv
+from TSP_baseline import solve_concorde_log
 from torch.optim import Adam as Optimizer
 from torch.optim.lr_scheduler import MultiStepLR as Scheduler
 
+from generate_adv import generate_adv_dataset
 from utils.utils import *
 from utils.functions import *
 
@@ -103,7 +105,16 @@ class TSPTrainer:
             # Validation
             dir = "../../data/TSP"
             paths = ["tsp100_uniform.pkl", "adv_0_tsp100_uniform.pkl"]
-            score_list, gap_list = self._val_and_stat(dir, paths, val_episodes=1000)
+            val_episodes, score_list, gap_list = 1000, [], []
+            nat_data = torch.Tensor(load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]).to(self.device)
+            # generate adv dataset based on the status of current model
+            self._generate_cur_adv(nat_data)
+
+            for path in paths:
+                score, gap = self._val_and_stat(dir, path, batch_size=500, val_episodes=val_episodes)
+                score_list.append(score); gap_list.append(gap)
+            score, gap = self._val_and_stat("./", "adv_tmp.pkl", batch_size=500, val_episodes=val_episodes * self.num_expert)
+            score_list.append(score); gap_list.append(gap)
             self.result_log.append('val_score', epoch, score_list)
             self.result_log.append('val_gap', epoch, gap_list)
 
@@ -169,7 +180,7 @@ class TSPTrainer:
             elif mode == "adv":
                 # generate adv_data
                 # TODO: where to put? Any scheduler?
-                eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max']), 1)[0]
+                eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max']+1), 1)[0]
                 for i in range(self.num_expert):
                     adv_data = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'], return_opt=False)
 
@@ -283,13 +294,14 @@ class TSPTrainer:
 
         return -max_pomo_reward.float().detach().mean().item(), loss  # (batch), (batch)
 
-    def _fast_val(self, model, data=None, path=None, offset=0, val_episodes=1000, aug_factor=1):
+    def _fast_val(self, model, data=None, path=None, offset=0, val_episodes=1000, aug_factor=1, eval_type="argmax"):
         data = torch.Tensor(load_dataset(path, disable_print=True)[offset: offset + val_episodes]) if data is None else data
         data = data.to(self.device)
         env = Env(**{'problem_size': data.size(1), 'pomo_size': data.size(1)})
         batch_size = data.size(0)
 
         model.eval()
+        model.set_eval_type(eval_type)
         with torch.no_grad():
             env.load_problems(batch_size, problems=data, aug_factor=aug_factor)
             reset_state, _, _ = env.reset()
@@ -310,34 +322,58 @@ class TSPTrainer:
 
         return no_aug_score, aug_score
 
-    def _val_and_stat(self, dir, paths, val_episodes=1000):
-        res, res1 = [], []
-        for val_path in paths:
-            no_aug_score_list, aug_score_list, no_aug_gap_list, aug_gap_list = [], [], [], []
-            no_aug_scores, aug_scores = torch.zeros(val_episodes, 0), torch.zeros(val_episodes, 0)
-            opt_sol = load_dataset(os.path.join(dir, "concorde_{}".format(val_path)), disable_print=True)[: val_episodes]
-            opt_sol = [i[0] for i in opt_sol]
-            for i in range(self.num_expert):
-                no_aug_score, aug_score = self._fast_val(self.models[i], path=os.path.join(dir, val_path), val_episodes=val_episodes, aug_factor=8)
-                no_aug_score_list.append(round(no_aug_score.mean().item(), 4))
-                aug_score_list.append(round(aug_score.mean().item(), 4))
-                no_aug_scores = torch.cat((no_aug_scores, no_aug_score.unsqueeze(1)), dim=1)
-                aug_scores = torch.cat((aug_scores, aug_score.unsqueeze(1)), dim=1)
-                gap = [(no_aug_score[j].item() - opt_sol[j]) / opt_sol[j] * 100 for j in range(val_episodes)]
-                no_aug_gap_list.append(round(sum(gap) / len(gap), 4))
-                gap = [(aug_score[j].item() - opt_sol[j]) / opt_sol[j] * 100 for j in range(val_episodes)]
-                aug_gap_list.append(round(sum(gap) / len(gap), 4))
-            moe_no_aug_score, moe_aug_score = no_aug_scores.min(1)[0], aug_scores.min(1)[0]
-            moe_no_aug_gap = [(moe_no_aug_score[j].item() - opt_sol[j]) / opt_sol[j] * 100 for j in range(val_episodes)]
-            moe_aug_gap = [(moe_aug_score[j].item() - opt_sol[j]) / opt_sol[j] * 100 for j in range(val_episodes)]
-            moe_no_aug_gap, moe_aug_gap = sum(moe_no_aug_gap) / len(moe_no_aug_gap), sum(moe_aug_gap) / len(moe_aug_gap)
-            moe_no_aug_score, moe_aug_score = moe_no_aug_score.mean().item(), moe_aug_score.mean().item()
-            res.append(moe_aug_score)
-            res1.append(moe_aug_gap)
+    def _generate_cur_adv(self, nat_data):
+        adv_data = torch.zeros(0, self.env_params['problem_size'], 2).to(self.device)
+        for j in range(self.num_expert):
+            data = generate_adv_dataset(self.models[j], nat_data, eps_min=1, eps_max=100, num_steps=1)
+            adv_data = torch.cat((adv_data, data), dim=0)
+        save_dataset(adv_data, "./adv_tmp.pkl")
 
-            print(">> Val Score on {}: NO_AUG_Score: {} -> Min {} Col {}, AUG_Score: {} -> Min {} -> Col {}".format(
-                val_path, no_aug_score_list, min(no_aug_score_list), moe_no_aug_score, aug_score_list, min(aug_score_list), moe_aug_score))
-            print(">> Val Score on {}: NO_AUG_Gap: {} -> Min {}% -> Col {}%, AUG_Gap: {} -> Min {}% -> Col {}%".format(
-                val_path, no_aug_gap_list, min(no_aug_gap_list), moe_no_aug_gap, aug_gap_list, min(aug_gap_list), moe_aug_gap))
+        # obtain (sub-)opt solution using Concorde
+        params = argparse.ArgumentParser()
+        params.cpus, params.n, params.progress_bar_mininterval = 32, None, 0.1
+        dataset = [(instance.cpu().numpy(),) for instance in adv_data]
+        executable = os.path.abspath(os.path.join('concorde', 'concorde', 'TSP', 'concorde'))
+        def run_func(args):
+            return solve_concorde_log(executable, *args, disable_cache=True)
 
-        return res, res1
+        results, _ = run_all_in_pool(run_func, "./Concorde_result", dataset, params, use_multiprocessing=False)
+        os.system("rm -rf ./Concorde_result")
+        results = [(i[0], i[1]) for i in results]
+        save_dataset(results, "./concorde_adv_tmp.pkl")
+
+    def _val_and_stat(self, dir, val_path, batch_size=500, val_episodes=1000):
+        no_aug_score_list, aug_score_list, no_aug_gap_list, aug_gap_list = [], [], [], []
+        no_aug_scores, aug_scores = torch.zeros(val_episodes, 0), torch.zeros(val_episodes, 0)
+        opt_sol = load_dataset(os.path.join(dir, "concorde_{}".format(val_path)), disable_print=True)[: val_episodes]
+        opt_sol = [i[0] for i in opt_sol]
+        for i in range(self.num_expert):
+            episode, no_aug_score, aug_score = 0, torch.zeros(0).to(self.device), torch.zeros(0).to(self.device)
+            while episode < val_episodes:
+                remaining = val_episodes - episode
+                bs = min(batch_size, remaining)
+                no_aug, aug = self._fast_val(self.models[i], path=os.path.join(dir, val_path), offset=episode, val_episodes=bs, aug_factor=8, eval_type="argmax")
+                no_aug_score = torch.cat((no_aug_score, no_aug), dim=0)
+                aug_score = torch.cat((aug_score, aug), dim=0)
+                episode += bs
+
+            no_aug_score_list.append(round(no_aug_score.mean().item(), 4))
+            aug_score_list.append(round(aug_score.mean().item(), 4))
+            no_aug_scores = torch.cat((no_aug_scores, no_aug_score.unsqueeze(1)), dim=1)
+            aug_scores = torch.cat((aug_scores, aug_score.unsqueeze(1)), dim=1)
+            gap = [(no_aug_score[j].item() - opt_sol[j]) / opt_sol[j] * 100 for j in range(val_episodes)]
+            no_aug_gap_list.append(round(sum(gap) / len(gap), 4))
+            gap = [(aug_score[j].item() - opt_sol[j]) / opt_sol[j] * 100 for j in range(val_episodes)]
+            aug_gap_list.append(round(sum(gap) / len(gap), 4))
+        moe_no_aug_score, moe_aug_score = no_aug_scores.min(1)[0], aug_scores.min(1)[0]
+        moe_no_aug_gap = [(moe_no_aug_score[j].item() - opt_sol[j]) / opt_sol[j] * 100 for j in range(val_episodes)]
+        moe_aug_gap = [(moe_aug_score[j].item() - opt_sol[j]) / opt_sol[j] * 100 for j in range(val_episodes)]
+        moe_no_aug_gap, moe_aug_gap = sum(moe_no_aug_gap) / len(moe_no_aug_gap), sum(moe_aug_gap) / len(moe_aug_gap)
+        moe_no_aug_score, moe_aug_score = moe_no_aug_score.mean().item(), moe_aug_score.mean().item()
+
+        print(">> Val Score on {}: NO_AUG_Score: {} -> Min {} Col {}, AUG_Score: {} -> Min {} -> Col {}".format(
+            val_path, no_aug_score_list, min(no_aug_score_list), moe_no_aug_score, aug_score_list, min(aug_score_list), moe_aug_score))
+        print(">> Val Score on {}: NO_AUG_Gap: {} -> Min {}% -> Col {}%, AUG_Gap: {} -> Min {}% -> Col {}%".format(
+            val_path, no_aug_gap_list, min(no_aug_gap_list), moe_no_aug_gap, aug_gap_list, min(aug_gap_list), moe_aug_gap))
+
+        return moe_aug_score, moe_aug_gap

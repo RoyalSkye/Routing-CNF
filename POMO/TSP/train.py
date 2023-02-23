@@ -38,7 +38,7 @@ optimizer_params = {
         'weight_decay': 1e-6
     },
     'scheduler': {
-        'milestones': [51, ],
+        'milestones': [31, ],
         'gamma': 0.1
     }
 }
@@ -48,7 +48,7 @@ trainer_params = {
     'cuda_device_num': CUDA_DEVICE_NUM,
     'seed': 1234,
     'method': 'ours',  # choose from ['ours', 'baseline', 'baseline_hac']
-    'epochs': 100,
+    'epochs': 50,
     'pretrain_epochs': 3000,
     'train_episodes': 100 * 1000,
     'num_expert': 3,
@@ -81,7 +81,7 @@ trainer_params = {
 }
 
 adv_params = {
-    'eps_min': 0,
+    'eps_min': 1,
     'eps_max': 100,
     'num_steps': 1,
 }

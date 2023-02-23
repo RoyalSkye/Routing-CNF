@@ -9,6 +9,7 @@ class TSPModel(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         self.model_params = model_params
+        self.eval_type = self.model_params['eval_type']
 
         self.encoder = TSP_Encoder(**model_params)
         self.decoder = TSP_Decoder(**model_params)
@@ -20,6 +21,9 @@ class TSPModel(nn.Module):
         self.encoded_nodes = self.encoder(reset_state.problems)
         # shape: (batch, problem, EMBEDDING_DIM)
         self.decoder.set_kv(self.encoded_nodes)
+
+    def set_eval_type(self, eval_type):
+        self.eval_type = eval_type
 
     def forward(self, state, selected=None, return_probs=False):
         batch_size = state.BATCH_IDX.size(0)
@@ -39,7 +43,7 @@ class TSPModel(nn.Module):
             # shape: (batch, pomo, problem)
             if selected is None:
                 while True:
-                    if self.training or self.model_params['eval_type'] == 'softmax':
+                    if self.training or self.eval_type == 'softmax':
                         selected = probs.reshape(batch_size * pomo_size, -1).multinomial(1).squeeze(dim=1).reshape(batch_size, pomo_size)
                     else:
                         selected = probs.argmax(dim=2)

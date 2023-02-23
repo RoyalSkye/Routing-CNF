@@ -47,6 +47,7 @@ def generate_x_adv(model, data, eps=10.0, num_steps=1, return_opt=False):
     if eps == 0: return data
     # generate x_adv
     model.eval()
+    model.set_eval_type("softmax")
     aug_factor, batch_size = 1, data.size(0)
     env = Env(**{'problem_size': data.size(1), 'pomo_size': data.size(1)})
     with torch.enable_grad():
