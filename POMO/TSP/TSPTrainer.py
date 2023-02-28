@@ -62,7 +62,7 @@ class TSPTrainer:
             checkpoint = torch.load(checkpoint_fullname, map_location=device)
             model_state_dict = checkpoint['model_state_dict']
             optimizer_state_dict = checkpoint['optimizer_state_dict']
-            for i in range(len(model_state_dict)):
+            for i in range(self.num_expert):
                 model, optimizer, scheduler = self.models[i], self.optimizers[i], self.schedulers[i]
                 model.load_state_dict(model_state_dict[i])
                 optimizer.load_state_dict(optimizer_state_dict[i])
@@ -107,7 +107,7 @@ class TSPTrainer:
 
             # Validation
             dir = "../../data/TSP"
-            paths = ["tsp100_uniform.pkl", "adv_0_tsp100_uniform.pkl"]
+            paths = ["tsp100_uniform.pkl", "adv_tsp100_uniform.pkl"]
             val_episodes, score_list, gap_list = 1000, [], []
             nat_data = torch.Tensor(load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]).to(self.device)
             # generate adv dataset based on the status of current model
@@ -152,7 +152,7 @@ class TSPTrainer:
 
             if all_done:
                 self.logger.info(" *** Training Done *** ")
-                self.logger.info("Now, printing log array...")
+                # self.logger.info("Now, printing log array...")
                 # util_print_log_array(self.logger, self.result_log)
 
     def _train_one_epoch(self, epoch, mode="nat"):
@@ -163,7 +163,7 @@ class TSPTrainer:
             Phase 2 mode == "adv":
                 One pretrain model -> several experts
                     - Generating adversarial instances;
-                    - Train on adv ins. with instance_choice or expert_choice
+                    - Train on nat+adv ins. with routing mechanism
         """
         # score_AM, loss_AM = AverageMeter(), AverageMeter()
         episode = 0
@@ -187,9 +187,9 @@ class TSPTrainer:
                 eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max']+1), 1)[0]
                 for i in range(self.num_expert):
                     adv_data = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'], return_opt=False)
+                    data = torch.cat((nat_data, adv_data), dim=0)  # nat+adv
                     scores = torch.zeros(batch_size * 2, 0)
                     for j in range(self.num_expert):
-                        data = torch.cat((nat_data, adv_data), dim=0)
                         _, score = self._fast_val(self.models[i], data=data, eval_type="softmax")
                         scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                     # print(scores)  # the scores will not be the same even at the beginning, since the policy is stochastic
@@ -248,6 +248,7 @@ class TSPTrainer:
                 a. Each instance chooses its best expert (cons: no load_balance)
                 b. Each expert chooses TopK instances based on relative gaps (cons: some instances may not be trained)
                 c. Combine together
+                d. jointly train a routing network (see MOE)
         """
         batch_size = scores.size(0)
         if type == "ins_choice":
@@ -310,20 +311,20 @@ class TSPTrainer:
         return no_aug_score, aug_score
 
     def _generate_cur_adv(self, nat_data):
+        # generate adv examples based on current models
         adv_data = torch.zeros(0, self.env_params['problem_size'], 2).to(self.device)
         for j in range(self.num_expert):
-            data = generate_adv_dataset(self.models[j], nat_data, eps_min=1, eps_max=100, num_steps=1)
+            data = generate_adv_dataset(self.models[j], nat_data, eps_min=self.adv_params['eps_min'], eps_max=self.adv_params['eps_max'], num_steps=self.adv_params['num_steps'])
             adv_data = torch.cat((adv_data, data), dim=0)
         save_dataset(adv_data, "./adv_tmp.pkl")
 
         # obtain (sub-)opt solution using Concorde
         params = argparse.ArgumentParser()
-        params.cpus, params.n, params.progress_bar_mininterval = 32, None, 0.1
+        params.cpus, params.n, params.progress_bar_mininterval = None, None, 0.1
         dataset = [(instance.cpu().numpy(),) for instance in adv_data]
         executable = os.path.abspath(os.path.join('concorde', 'concorde', 'TSP', 'concorde'))
         def run_func(args):
             return solve_concorde_log(executable, *args, disable_cache=True)
-
         results, _ = run_all_in_pool(run_func, "./Concorde_result", dataset, params, use_multiprocessing=False)
         os.system("rm -rf ./Concorde_result")
         results = [(i[0], i[1]) for i in results]

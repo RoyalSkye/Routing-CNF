@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
     # obtain (sub-)opt solution using Concorde
     params = argparse.ArgumentParser()
-    params.cpus, params.n, params.progress_bar_mininterval = 32, None, 0.1
+    params.cpus, params.n, params.progress_bar_mininterval = None, None, 0.1
     dataset = [(instance.cpu().numpy(),) for instance in adv_data]
     executable = os.path.abspath(os.path.join('concorde', 'concorde', 'TSP', 'concorde'))
     def run_func(args):
@@ -88,4 +88,4 @@ if __name__ == "__main__":
 
     results = [(i[0], i[1]) for i in results]
     save_dataset(results, "{}/concorde_adv_{}".format(dir, filename))
-    print(">> Adversarial Dataset (len: {}) Generated Finished!".format(adv_data.size(0)))
+    print(">> Adversarial Dataset (len: {}) Generated Finished!".format(len(results)))

@@ -9,20 +9,19 @@ class CVRPModel(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         self.model_params = model_params
-        self.eval_type = self.model_params['eval_type']
 
         self.encoder = CVRP_Encoder(**model_params)
         self.decoder = CVRP_Decoder(**model_params)
         self.encoded_nodes = None
-        self.device = torch.device('cuda', torch.cuda.current_device()) if 'device' not in model_params.keys() else model_params['device']
         # shape: (batch, problem+1, EMBEDDING_DIM)
 
     def pre_forward(self, reset_state):
-        depot_xy = reset_state.depot_xy
+        # print(reset_state.data)  # (batch, problem+1, 3)
+        depot_xy = reset_state.data[:, [0], 0:2]
         # shape: (batch, 1, 2)
-        node_xy = reset_state.node_xy
+        node_xy = reset_state.data[:, 1:, 0:2]
         # shape: (batch, problem, 2)
-        node_demand = reset_state.node_demand
+        node_demand = reset_state.data[:, 1:, 2]
         # shape: (batch, problem)
         node_xy_demand = torch.cat((node_xy, node_demand[:, :, None]), dim=2)
         # shape: (batch, problem, 3)
@@ -31,56 +30,15 @@ class CVRPModel(nn.Module):
         # shape: (batch, problem+1, embedding)
         self.decoder.set_kv(self.encoded_nodes)
 
-    def set_eval_type(self, eval_type):
-        self.eval_type = eval_type
-
-    def forward(self, state, selected=None, return_probs=False):
-        batch_size = state.BATCH_IDX.size(0)
-        pomo_size = state.BATCH_IDX.size(1)
-
-        if state.selected_count == 0:  # First Move, depot
-            selected = torch.zeros(size=(batch_size, pomo_size), dtype=torch.long)
-            prob = torch.ones(size=(batch_size, pomo_size))
-            probs = torch.ones(size=(batch_size, pomo_size, self.encoded_nodes.size(1)))
-            # shape: (batch, pomo, problem_size+1)
-
-            # # Use Averaged encoded nodes for decoder input_1
-            # encoded_nodes_mean = self.encoded_nodes.mean(dim=1, keepdim=True)
-            # # shape: (batch, 1, embedding)
-            # self.decoder.set_q1(encoded_nodes_mean)
-
-            # # Use encoded_depot for decoder input_2
-            # encoded_first_node = self.encoded_nodes[:, [0], :]
-            # # shape: (batch, 1, embedding)
-            # self.decoder.set_q2(encoded_first_node)
-
-        elif state.selected_count == 1:  # Second Move, POMO
-            selected = torch.arange(start=1, end=pomo_size+1)[None, :].expand(batch_size, pomo_size)
-            prob = torch.ones(size=(batch_size, pomo_size))
-            probs = torch.ones(size=(batch_size, pomo_size, self.encoded_nodes.size(1)))
-
+    def forward(self, state, selected=None):
+        if selected is not None:  # First Move - depot or Second Move - POMO
+            pass
         else:
             encoded_last_node = _get_encoding(self.encoded_nodes, state.current_node)
             # shape: (batch, pomo, embedding)
-            probs = self.decoder(encoded_last_node, state.load, ninf_mask=state.ninf_mask)
+            probs = self.decoder(encoded_last_node, state.loaded, ninf_mask=state.ninf_mask)
             # shape: (batch, pomo, problem+1)
-            if selected is None:
-                while True:
-                    if self.training or self.model_params['eval_type'] == 'softmax':
-                        selected = probs.reshape(batch_size * pomo_size, -1).multinomial(1).squeeze(dim=1).reshape(batch_size, pomo_size)
-                    else:
-                        selected = probs.argmax(dim=2)
-                    prob = probs[state.BATCH_IDX, state.POMO_IDX, selected].reshape(batch_size, pomo_size)
-                    # shape: (batch, pomo)
-                    if (prob != 0).all():
-                        break
-            else:
-                selected = selected
-                prob = probs[state.BATCH_IDX, state.POMO_IDX, selected].reshape(batch_size, pomo_size)
-
-        if return_probs:
-            return selected, prob, probs
-        return selected, prob
+            return probs
 
 
 def _get_encoding(encoded_nodes, node_index_to_pick):
@@ -147,9 +105,9 @@ class EncoderLayer(nn.Module):
         self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
 
-        self.add_n_normalization_1 = AddAndInstanceNormalization(**model_params)
+        self.add_n_normalization_1 = Add_And_Normalization_Module(**model_params)
         self.feed_forward = FeedForward(**model_params)
-        self.add_n_normalization_2 = AddAndInstanceNormalization(**model_params)
+        self.add_n_normalization_2 = Add_And_Normalization_Module(**model_params)
 
     def forward(self, input1):
         # input1.shape: (batch, problem+1, embedding)
@@ -325,7 +283,7 @@ def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None):
     return out_concat
 
 
-class AddAndInstanceNormalization(nn.Module):
+class Add_And_Normalization_Module(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         embedding_dim = model_params['embedding_dim']
@@ -359,27 +317,6 @@ class AddAndInstanceNormalization(nn.Module):
             back_trans = input1 + self.norm * input2
         else:
             back_trans = input1 + input2
-
-        return back_trans
-
-
-class AddAndBatchNormalization(nn.Module):
-    def __init__(self, **model_params):
-        super().__init__()
-        embedding_dim = model_params['embedding_dim']
-        self.norm_by_EMB = nn.BatchNorm1d(embedding_dim, affine=True)
-        # 'Funny' Batch_Norm, as it will normalized by EMB dim
-
-    def forward(self, input1, input2):
-        # input.shape: (batch, problem, embedding)
-
-        batch_s = input1.size(0)
-        problem_s = input1.size(1)
-        embedding_dim = input1.size(2)
-
-        added = input1 + input2
-        normalized = self.norm_by_EMB(added.reshape(batch_s * problem_s, embedding_dim))
-        back_trans = normalized.reshape(batch_s, problem_s, embedding_dim)
 
         return back_trans
 

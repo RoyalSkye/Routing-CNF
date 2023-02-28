@@ -29,7 +29,7 @@ model_params = {
     'logit_clipping': 10,
     'ff_hidden_dim': 512,
     'eval_type': 'argmax',
-    'norm': "instance",
+    'norm': "instance"
 }
 
 optimizer_params = {
