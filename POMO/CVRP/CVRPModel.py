@@ -39,7 +39,7 @@ class CVRPModel(nn.Module):
         pomo_size = state.BATCH_IDX.size(1)
 
         if state.selected_count == 0:  # First Move, depot
-            selected = torch.zeros(size=(batch_size, pomo_size), dtype=torch.long)
+            selected = torch.zeros(size=(batch_size, pomo_size), dtype=torch.long).to(self.device)
             prob = torch.ones(size=(batch_size, pomo_size))
             probs = torch.ones(size=(batch_size, pomo_size, self.encoded_nodes.size(1)))
             # shape: (batch, pomo, problem_size+1)
@@ -55,7 +55,7 @@ class CVRPModel(nn.Module):
             # self.decoder.set_q2(encoded_first_node)
 
         elif state.selected_count == 1:  # Second Move, POMO
-            selected = torch.arange(start=1, end=pomo_size+1)[None, :].expand(batch_size, pomo_size)
+            selected = torch.arange(start=1, end=pomo_size+1)[None, :].expand(batch_size, pomo_size).to(self.device)
             prob = torch.ones(size=(batch_size, pomo_size))
             probs = torch.ones(size=(batch_size, pomo_size, self.encoded_nodes.size(1)))
 

@@ -118,10 +118,10 @@ def main():
         best_gaps = [(s - opt_sol[j]) / opt_sol[j] * 100 for j, s in enumerate(best_scores.tolist())]
         best_aug_gaps = [(s - opt_sol[j]) / opt_sol[j] * 100 for j, s in enumerate(best_aug_scores.tolist())]
 
-        print(">> Val Score on {}: NO_AUG_Score: {.:4f} -> Min {:.4f} Col {:.4f}, AUG_Score: {:.4f} -> Min {:.4f} -> Col {:.4f}".format(
+        print(">> Val Score on {}: NO_AUG_Score: {} -> Min {:.4f} Col {:.4f}, AUG_Score: {} -> Min {:.4f} -> Col {:.4f}".format(
             os.path.split(tester_params['test_set_path'])[-1], avg_scores, min(avg_scores), best_scores.mean().item(),
             avg_aug_scores, min(avg_aug_scores), best_aug_scores.mean().item()))
-        print(">> Val Score on {}: NO_AUG_Gap: {:.4f} -> Min {:.4f}% -> Col {:.4f}%, AUG_Gap: {:.4f} -> Min {:.4f}% -> Col {:.4f}%".format(
+        print(">> Val Score on {}: NO_AUG_Gap: {} -> Min {:.4f}% -> Col {:.4f}%, AUG_Gap: {} -> Min {:.4f}% -> Col {:.4f}%".format(
             os.path.split(tester_params['test_set_path'])[-1], avg_gaps, min(avg_gaps), sum(best_gaps)/len(best_gaps),
             avg_aug_gaps, min(avg_aug_gaps), sum(best_aug_gaps)/len(best_aug_gaps)))
     else:
@@ -143,7 +143,7 @@ def _print_config():
 
 def t_test(path1, path2):
     """
-    Conduct T-test to check the null hypothesis. If p < 0.05, the null hypothesis is rejected.
+        Conduct T-test to check the null hypothesis. If p < 0.05, the null hypothesis is rejected.
     """
     import pickle
     with open(path1, 'rb') as f1:

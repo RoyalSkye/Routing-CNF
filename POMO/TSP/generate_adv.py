@@ -1,8 +1,11 @@
 import os, sys
+import time
 import argparse
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, "..")  # for utils
 import torch
+import numpy as np
+from datetime import timedelta
 
 from TSPModel import TSPModel as Model
 from TSProblemDef import generate_x_adv
@@ -69,23 +72,32 @@ if __name__ == "__main__":
         models = [models[i].load_state_dict(model_state_dict[i]) for i in range(opts.num_expert)]
 
     # generate adversarial examples
+    start_time = time.time()
     adv_data = torch.zeros(0, test_data.size(1), 2)
     for i in range(opts.num_expert):
         data = generate_adv_dataset(models[i], test_data, eps_min=opts.eps_min, eps_max=opts.eps_max, num_steps=opts.num_steps)
         adv_data = torch.cat((adv_data, data), dim=0)
     dir, filename = os.path.split(opts.test_set_path)
     save_dataset(adv_data, "{}/adv_{}".format(dir, filename))
+    print(">> Adversarial dataset generation finished within {:.2f}s".format(time.time() - start_time))
 
     # obtain (sub-)opt solution using Concorde
+    start_time = time.time()
     params = argparse.ArgumentParser()
-    params.cpus, params.n, params.progress_bar_mininterval = None, None, 0.1
+    params.cpus, params.n, params.progress_bar_mininterval = 32, None, 0.1
     dataset = [(instance.cpu().numpy(),) for instance in adv_data]
     executable = os.path.abspath(os.path.join('concorde', 'concorde', 'TSP', 'concorde'))
     def run_func(args):
         return solve_concorde_log(executable, *args, disable_cache=True)
-    results, _ = run_all_in_pool(run_func, "./Concorde_result", dataset, params, use_multiprocessing=False)
+    results, parallelism = run_all_in_pool(run_func, "./Concorde_result", dataset, params, use_multiprocessing=False)
     os.system("rm -rf ./Concorde_result")
+
+    costs, tours, durations = zip(*results)
+    print(">> Solving adversarial dataset finished using Concorde within {:.2f}s".format(time.time() - start_time))
+    print("Average cost: {} +- {}".format(np.mean(costs), 2 * np.std(costs) / np.sqrt(len(costs))))
+    print("Average serial duration: {} +- {}".format(np.mean(durations), 2 * np.std(durations) / np.sqrt(len(durations))))
+    print("Average parallel duration: {}".format(np.mean(durations) / parallelism))
+    print("Calculated total duration: {}".format(timedelta(seconds=int(np.sum(durations) / parallelism))))
 
     results = [(i[0], i[1]) for i in results]
     save_dataset(results, "{}/concorde_adv_{}".format(dir, filename))
-    print(">> Adversarial Dataset (len: {}) Generated Finished!".format(len(results)))

@@ -1,9 +1,12 @@
 import os, sys
+import time
 import pickle
 import argparse
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, "..")  # for utils
 import torch
+import numpy as np
+from datetime import timedelta
 
 from CVRPModel import CVRPModel as Model
 from CVRProblemDef import generate_x_adv
@@ -15,6 +18,7 @@ from utils.functions import *
 def generate_adv_dataset(model, data, eps_min=1, eps_max=100, num_steps=1):
     """
         generate adversarial dataset (ins and sol).
+        Note: data should include depot_xy, node_xy, normalized node_demand.
     """
     eps = iter([i for i in range(eps_min, eps_max+1, 1)])
     depot_xy, node_xy, node_demand = data
@@ -78,6 +82,7 @@ if __name__ == "__main__":
         models = [models[i].load_state_dict(model_state_dict[i]) for i in range(opts.num_expert)]
 
     # generate adversarial examples (only coordinates of nods are adversarially updated)
+    start_time = time.time()
     # adv_depot_xy = torch.zeros(0, 1, 2)
     adv_node_xy = torch.zeros(0, test_data[1].size(1), 2)
     for i in range(opts.num_expert):
@@ -90,19 +95,27 @@ if __name__ == "__main__":
     # save_dataset(adv_data, "{}/adv_{}".format(dir, filename))
     with open("{}/adv_{}".format(dir, filename), "wb") as f:
         pickle.dump(list(zip(adv_data[0].tolist(), adv_data[1].tolist(), adv_data[2].tolist(), adv_data[3].tolist())), f, pickle.HIGHEST_PROTOCOL)  # [(depot_xy, node_xy, node_demand, capacity), ...]
+    print(">> Adversarial dataset generation finished within {:.2f}s".format(time.time()-start_time))
 
     # obtain (sub-)opt solution using HGS
+    start_time = time.time()
     params = argparse.ArgumentParser()
-    params.cpus, params.n, params.progress_bar_mininterval = None, None, 0.1
+    params.cpus, params.n, params.progress_bar_mininterval = 32, None, 0.1
     dataset = [attr.cpu().tolist() for attr in adv_data]
     dataset = [(dataset[0][i][0], dataset[1][i], [int(d) for d in dataset[2][i]], int(dataset[3][i])) for i in range(adv_data[0].size(0))]
     executable = get_hgs_executable()
     def run_func(args):
         return solve_hgs_log(executable, *args, runs=1, disable_cache=True)  # otherwise it directly loads data from dir
 
-    results, _ = run_all_in_pool(run_func, "./HGS_result", dataset, params, use_multiprocessing=False)
+    results, parallelism = run_all_in_pool(run_func, "./HGS_result", dataset, params, use_multiprocessing=False)
     os.system("rm -rf ./HGS_result")
+
+    costs, tours, durations = zip(*results)
+    print(">> Solving adversarial dataset finished using HGS within {:.2f}s".format(time.time()-start_time))
+    print("Average cost: {} +- {}".format(np.mean(costs), 2 * np.std(costs) / np.sqrt(len(costs))))
+    print("Average serial duration: {} +- {}".format(np.mean(durations), 2 * np.std(durations) / np.sqrt(len(durations))))
+    print("Average parallel duration: {}".format(np.mean(durations) / parallelism))
+    print("Calculated total duration: {}".format(timedelta(seconds=int(np.sum(durations) / parallelism))))
 
     results = [(i[0], i[1]) for i in results]
     save_dataset(results, "{}/concorde_adv_{}".format(dir, filename))
-    print(">> Adversarial Dataset (len: {}) Generated Finished!".format(len(results)))

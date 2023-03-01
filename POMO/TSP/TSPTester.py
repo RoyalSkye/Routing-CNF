@@ -12,10 +12,7 @@ from utils.functions import load_dataset, save_dataset
 
 
 class TSPTester:
-    def __init__(self,
-                 env_params,
-                 model_params,
-                 tester_params):
+    def __init__(self, env_params, model_params, tester_params):
 
         # save arguments
         self.env_params = env_params
@@ -143,7 +140,6 @@ class TSPTester:
         return scores, aug_scores
 
     def _test_one_batch(self, model, env, test_data):
-        # Augmentation
         batch_size = test_data.size(0)
         if self.tester_params['augmentation_enable']:
             aug_factor = self.tester_params['aug_factor']
