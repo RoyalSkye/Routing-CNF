@@ -42,6 +42,8 @@ class CVRPTrainer:
             device = torch.device('cpu')
             torch.set_default_tensor_type('torch.FloatTensor')
         self.device = device
+        self.env_params['device'] = device
+        self.model_params['device'] = device
 
         # Main Components
         self.num_expert = self.trainer_params['num_expert']

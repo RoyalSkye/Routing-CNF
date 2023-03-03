@@ -42,6 +42,8 @@ class CVRPTrainer:
             device = torch.device('cpu')
             torch.set_default_tensor_type('torch.FloatTensor')
         self.device = device
+        self.env_params['device'] = device
+        self.model_params['device'] = device
 
         # Main Components
         self.num_expert = self.trainer_params['num_expert']
@@ -190,15 +192,41 @@ class CVRPTrainer:
             elif mode == "adv":
                 # TODO: where to put? Any scheduler?
                 eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max'] + 1), 1)[0]
+
+                # 1. generate adversarial examples by each expert (local)
                 for i in range(self.num_expert):
                     depot, node, demand = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'])
                     data = (torch.cat((depot_xy, depot), dim=0), torch.cat((node_xy, node), dim=0), torch.cat((node_demand, demand), dim=0))  # nat+adv
                     scores = torch.zeros(batch_size * 2, 0)
                     for j in range(self.num_expert):
-                        _, score = self._fast_val(self.models[i], data=data, eval_type="softmax")
+                        _, score = self._fast_val(self.models[j], data=data, eval_type="softmax")
                         scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                     # print(scores)  # the scores will not be the same even at the beginning, since the policy is stochastic
                     self._update_model(data, scores, type="ins_exp_choice")
+
+                # 2. collaborate to generate adversarial examples (global)
+                data = nat_data
+                for _ in self.adv_params['num_steps']:
+                    scores = torch.zeros(batch_size, 0)
+                    adv_depot, adv_node, adv_demand = torch.zeros(0, 1, 2), torch.zeros(0, data[1].size(1), 2), torch.zeros(0, data[2].size(1))
+                    for k in range(self.num_expert):
+                        _, score = self._fast_val(self.models[k], data=data, eval_type="softmax")
+                        scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
+                    _, id = scores.min(1)
+                    for k in range(self.num_expert):
+                        mask = (id == k)
+                        depot, node, demand = generate_x_adv(self.models[k], (data[0][mask], data[1][mask], data[2][mask]), eps=eps, num_steps=1, return_opt=False)
+                        adv_depot = torch.cat((adv_depot, depot), dim=0)
+                        adv_node = torch.cat((adv_node, node), dim=0)
+                        adv_demand = torch.cat((adv_demand, demand), dim=0)
+                    data = (adv_depot, adv_node, adv_demand)
+                data = (torch.cat((nat_data[0], data[0]), dim=0), torch.cat((nat_data[1], data[1]), dim=0), torch.cat((nat_data[2], data[2]), dim=0))  # nat+adv
+                scores = torch.zeros(batch_size * 2, 0)
+                for k in range(self.num_expert):
+                    _, score = self._fast_val(self.models[k], data=data, eval_type="softmax")
+                    scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
+                self._update_model(data, scores, type="ins_exp_choice")
+
             else:
                 raise NotImplementedError
 

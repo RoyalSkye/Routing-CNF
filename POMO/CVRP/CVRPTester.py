@@ -47,7 +47,7 @@ class CVRPTester:
 
         # load dataset
         if tester_params['test_set_path'].endswith(".pkl"):
-            data = load_dataset(tester_params['test_set_path'], disable_print=True)[: self.tester_params['test_episodes']]
+            data = load_dataset(tester_params['test_set_path'])[: self.tester_params['test_episodes']]
             depot_xy, node_xy, node_demand, capacity = [i[0] for i in data], [i[1] for i in data], [i[2] for i in data], [i[3] for i in data]
             depot_xy, node_xy, node_demand, capacity = torch.Tensor(depot_xy).to(self.device), torch.Tensor(node_xy).to(self.device), torch.Tensor(node_demand).to(self.device), torch.Tensor(capacity).to(self.device)
             node_demand = node_demand / capacity.view(-1, 1)

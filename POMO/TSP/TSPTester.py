@@ -47,7 +47,7 @@ class TSPTester:
 
         # load dataset
         if tester_params['test_set_path'].endswith(".pkl"):
-            self.test_data = torch.Tensor(load_dataset(tester_params['test_set_path'], disable_print=True)[: self.tester_params['test_episodes']])
+            self.test_data = torch.Tensor(load_dataset(tester_params['test_set_path'])[: self.tester_params['test_episodes']])
             opt_sol = load_dataset(tester_params['test_set_opt_sol_path'], disable_print=True)[: self.tester_params['test_episodes']]  # [(obj, route), ...]
             self.test_data = self.test_data.to(self.device)
             self.opt_sol = [i[0] for i in opt_sol]

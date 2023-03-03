@@ -111,8 +111,8 @@ def main():
             print(">> Model {}: Scores {:.4f} -> x8 Aug Scores {:.4f}; Gaps {:.4f}% -> x8 Aug Gaps {:.4f}%".format(
                 i, scores.mean().item(), aug_scores.mean().item(), sum(gaps) / len(gaps), sum(aug_gaps) / len(aug_gaps)))
 
-    best_scores, _ = all_scores.max(1)
-    best_aug_scores, _ = all_aug_scores.max(1)
+    best_scores, _ = all_scores.min(1)
+    best_aug_scores, _ = all_aug_scores.min(1)
     avg_scores, avg_aug_scores = all_scores.mean(0).tolist(), all_aug_scores.mean(0).tolist()
     if opt_sol is not None:
         best_gaps = [(s - opt_sol[j]) / opt_sol[j] * 100 for j, s in enumerate(best_scores.tolist())]
