@@ -1,8 +1,6 @@
 import os, random
 import argparse
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from logging import getLogger
 
 from TSPEnv import TSPEnv as Env
@@ -57,7 +55,7 @@ class TSPTrainer:
         self.models = [Model(**self.model_params) for _ in range(self.num_expert)]
         self.optimizers = [Optimizer(model.parameters(), **self.optimizer_params['optimizer']) for model in self.models]
         self.schedulers = [Scheduler(optimizer, **self.optimizer_params['scheduler']) for optimizer in self.optimizers]
-        self.routing_model = TSP_Routing(num_expert=self.num_expert) if self.trainer_params['routing_model'] else None
+        self.routing_model = TSP_Routing(embedding_dim=model_params['embedding_dim'], num_expert=self.num_expert) if self.trainer_params['routing_model'] else None
         self.routing_optimizer = Optimizer(self.routing_model.parameters(), **self.optimizer_params['optimizer']) if self.routing_model else None
         # self.routing_optimizer = torch.optim.SGD(self.routing_model.parameters(), lr=0.01) if self.routing_model else None
 
@@ -325,7 +323,7 @@ class TSPTrainer:
             avg_loss.backward()
             self.optimizers[j].step()
 
-    def _update_model_routing(self, data, scores, type="ins_choice", alpha=0.1, temp=1.0):
+    def _update_model_routing(self, data, scores, type="ins_choice", temp=1.0):
         """
             Updating model using both nat_data and adv_data, which are routed by a routing network.
                 - jointly train a routing network (see MOE - Mixture-Of-Experts)
@@ -334,6 +332,7 @@ class TSPTrainer:
         state = scores
         # state = scores / scores.max(1)[0].unsqueeze(1)
         # state = (scores - scores.min(1)[0].view(-1, 1)) / scores.min(1)[0].view(-1, 1)
+        self.routing_model.train()
         logits = self.routing_model(data, state) / temp  # (batch_size, num_expert)
         batch_size, routing_loss, avg_scores = scores.size(0), torch.zeros(0), torch.mean(scores, dim=1)
 
@@ -341,19 +340,17 @@ class TSPTrainer:
             probs = torch.softmax(logits, dim=1)
             # id = torch.multinomial(probs, num_samples=1, replacement=False).squeeze(1)  # (batch_size)
             id = torch.topk(probs, 1, dim=1, largest=True, sorted=False)[1].squeeze(1)
-            # print(probs)
         elif type == "exp_choice":
             probs = torch.softmax(logits, dim=0)
-            # id = torch.multinomial(probs.T, num_samples=batch_size//2, replacement=False).T  # (batch_size//2, num_expert)
-            id = torch.topk(probs, batch_size//2, dim=0, largest=True, sorted=False)[1]
-            # print(probs)
+            # id = torch.multinomial(probs.T, num_samples=batch_size // 2, replacement=False).T  # (batch_size//2, num_expert)
+            id = torch.topk(probs, batch_size // 2, dim=0, largest=True, sorted=False)[1]
         elif type == "ins_exp_choice":
+            alpha = 0.5
             probs1, probs2 = torch.softmax(logits, dim=1), torch.softmax(logits, dim=0)
             # id1 = torch.multinomial(probs1, num_samples=1, replacement=False).squeeze(1)
-            # id2 = torch.multinomial(probs2.T, num_samples=batch_size//2, replacement=False).T
+            # id2 = torch.multinomial(probs2.T, num_samples=batch_size // 2, replacement=False).T
             id1 = torch.topk(probs1, 1, dim=1, largest=True, sorted=False)[1].squeeze(1)
-            id2 = torch.topk(probs2, batch_size//2, dim=0, largest=True, sorted=False)[1]
-            # print(torch.cat((probs1, probs2), dim=1))
+            id2 = torch.topk(probs2, batch_size // 2, dim=0, largest=True, sorted=False)[1]
 
         # routing and training
         for j in range(self.num_expert):

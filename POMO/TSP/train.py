@@ -49,7 +49,7 @@ trainer_params = {
     'seed': 1234,
     'method': 'ours',  # choose from ['ours', 'baseline', 'baseline_hac']
     'routing_model': True,
-    'epochs': 50,
+    'epochs': 40,
     'pretrain_epochs': 3000,
     'train_episodes': 100 * 1000,
     'num_expert': 3,

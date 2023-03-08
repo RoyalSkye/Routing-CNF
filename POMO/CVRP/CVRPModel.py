@@ -66,7 +66,7 @@ class CVRPModel(nn.Module):
             # shape: (batch, pomo, problem+1)
             if selected is None:
                 while True:
-                    if self.training or self.model_params['eval_type'] == 'softmax':
+                    if self.training or self.eval_type == 'softmax':
                         selected = probs.reshape(batch_size * pomo_size, -1).multinomial(1).squeeze(dim=1).reshape(batch_size, pomo_size)
                     else:
                         selected = probs.argmax(dim=2)
@@ -397,3 +397,44 @@ class FeedForward(nn.Module):
         # input.shape: (batch, problem, embedding)
 
         return self.W2(F.relu(self.W1(input1)))
+
+
+class CVRP_Routing(nn.Module):
+
+    def __init__(self, embedding_dim=128, num_expert=1, logit_clipping=10):
+        super().__init__()
+        self.num_expert = num_expert
+        self.embedding_dim = embedding_dim
+        self.logit_clipping = logit_clipping
+
+        self.expert = nn.Embedding(num_expert, embedding_dim)
+        self.W1 = nn.Linear(2, embedding_dim)
+        self.W2 = nn.Linear(3, embedding_dim)
+        self.W3 = nn.Linear(num_expert, embedding_dim)
+        self.W4 = nn.Linear(embedding_dim*2, embedding_dim)
+        self.Wq = nn.Linear(embedding_dim * num_expert, embedding_dim, bias=False)
+        self.Wk = nn.Linear(embedding_dim, embedding_dim, bias=False)
+
+    def forward(self, x, state):
+        """
+            input:
+                - depot_xy: (batch_size, 1, 2)
+                - node_xy: (batch_size, problem_size, 2)
+                - node_demand: (batch_size, problem_size)
+                - state: (batch_size, num_expert)
+            output - logits: (batch_size, num_expert)
+        """
+        depot_xy, node_xy, node_demand = x
+        node_xy_demand = torch.cat((node_xy, node_demand[:, :, None]), dim=2)  # (batch_size, problem_size, 3)
+        embedded_depot = self.W1(depot_xy)
+        embedded_node = self.W2(node_xy_demand)
+        h = torch.cat((embedded_depot, embedded_node), dim=1)  # (batch_size, problem_size+1, embedding_dim)
+        h = h.mean(1)
+
+        state = self.W3(state)  # (batch_size, embedding_dim)
+        q = self.W4(torch.cat((h, state), dim=1))  # (batch_size, embedding_dim)
+        k = self.Wk(self.expert(torch.arange(self.num_expert)))  # (num_expert, embedding_dim)
+        score = torch.matmul(q, k.transpose(0, 1)) / self.embedding_dim
+        logits = self.logit_clipping * torch.tanh(score)  # (batch_size, num_expert)
+
+        return logits

@@ -38,7 +38,7 @@ optimizer_params = {
         'weight_decay': 1e-6
     },
     'scheduler': {
-        'milestones': [8001, 8051],
+        'milestones': [301, ],
         'gamma': 0.1
     }
 }
@@ -48,14 +48,15 @@ trainer_params = {
     'cuda_device_num': CUDA_DEVICE_NUM,
     'seed': 1234,
     'method': 'ours',  # choose from ['ours', 'baseline', 'baseline_hac']
-    'epochs': 8100,
-    'pretrain_epochs': 30000,
+    'routing_model': True,
+    'epochs': 400,
+    'pretrain_epochs': 30500,
     'train_episodes': 10 * 1000,
     'num_expert': 3,
-    'train_batch_size': 64,
+    'train_batch_size': 32,
     'logging': {
-        'model_save_interval': 500,
-        'img_save_interval': 500,
+        'model_save_interval': 100,
+        'img_save_interval': 100,
         'log_image_params_1': {
             'json_foldername': 'log_image_style',
             'filename': 'general.json'
@@ -102,7 +103,7 @@ def main():
 
     seed_everything(trainer_params['seed'])
 
-    print(">> Starting {} Training".format(trainer_params['method']))
+    print(">> Starting {} Training, Routing network {}".format(trainer_params['method'], trainer_params['routing_model']))
     if trainer_params['method'] == "ours":
         trainer = Trainer(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
     else:
