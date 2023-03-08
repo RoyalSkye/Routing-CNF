@@ -48,6 +48,7 @@ trainer_params = {
     'cuda_device_num': CUDA_DEVICE_NUM,
     'seed': 1234,
     'method': 'ours',  # choose from ['ours', 'baseline', 'baseline_hac']
+    'routing_model': True,
     'epochs': 50,
     'pretrain_epochs': 3000,
     'train_episodes': 100 * 1000,
@@ -103,7 +104,7 @@ def main():
 
     seed_everything(trainer_params['seed'])
 
-    print(">> Starting {} Training".format(trainer_params['method']))
+    print(">> Starting {} Training, Routing network {}".format(trainer_params['method'], trainer_params['routing_model']))
     if trainer_params['method'] == "ours":
         trainer = Trainer(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
     else:

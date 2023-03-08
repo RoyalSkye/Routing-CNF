@@ -333,3 +333,33 @@ class Feed_Forward_Module(nn.Module):
         # input.shape: (batch, problem, embedding)
 
         return self.W2(F.relu(self.W1(input1)))
+
+
+class TSP_Routing(nn.Module):
+
+    def __init__(self, embedding_dim=128, num_expert=1, logit_clipping=10):
+        super().__init__()
+        self.num_expert = num_expert
+        self.embedding_dim = embedding_dim
+        self.logit_clipping = logit_clipping
+        self.expert = nn.Embedding(num_expert, embedding_dim)
+
+        self.W1 = nn.Linear(2, embedding_dim)
+        self.W2 = nn.Linear(num_expert, embedding_dim)
+        self.W3 = nn.Linear(embedding_dim*2, embedding_dim)
+        self.Wq = nn.Linear(embedding_dim * num_expert, embedding_dim)
+        self.Wk = nn.Linear(embedding_dim, embedding_dim)
+
+    def forward(self, x, state):
+        """
+            input - x: (batch_size, problem, 2); state: (batch_size, num_expert)
+            output - logits: (batch_size, num_expert)
+        """
+        x = self.W1(x).mean(1)  # (batch_size, embedding_dim)
+        state = self.W2(state)  # (batch_size, embedding_dim)
+        q = self.W3(torch.cat((x, state), dim=1))  # (batch_size, embedding_dim)
+        k = self.Wk(self.expert(torch.arange(self.num_expert)))  # (num_expert, embedding_dim)
+        score = torch.matmul(q, k.transpose(0, 1)) / self.embedding_dim
+        logits = self.logit_clipping * torch.tanh(score)  # (batch_size, num_expert)
+
+        return logits

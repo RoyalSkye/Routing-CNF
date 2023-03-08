@@ -190,8 +190,8 @@ class CVRPTrainer:
                 avg_loss.backward()
                 self.pre_optimizer.step()
             elif mode == "adv":
-                # TODO: where to put? Any scheduler?
                 eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max'] + 1), 1)[0]
+                # eps = 1 + int(1 / 2 * (1 - math.cos(math.pi * min(epoch / 30, 1))) * (100 - 1))  # cosine
 
                 # 1. generate adversarial examples by each expert (local)
                 for i in range(self.num_expert):
@@ -199,18 +199,18 @@ class CVRPTrainer:
                     data = (torch.cat((depot_xy, depot), dim=0), torch.cat((node_xy, node), dim=0), torch.cat((node_demand, demand), dim=0))  # nat+adv
                     scores = torch.zeros(batch_size * 2, 0)
                     for j in range(self.num_expert):
-                        _, score = self._fast_val(self.models[j], data=data, eval_type="softmax")
+                        _, score = self._fast_val(self.models[j], data=data, aug_factor=1, eval_type="softmax")
                         scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                     # print(scores)  # the scores will not be the same even at the beginning, since the policy is stochastic
                     self._update_model(data, scores, type="ins_exp_choice")
 
                 # 2. collaborate to generate adversarial examples (global)
                 data = nat_data
-                for _ in self.adv_params['num_steps']:
+                for _ in range(self.adv_params['num_steps']):
                     scores = torch.zeros(batch_size, 0)
                     adv_depot, adv_node, adv_demand = torch.zeros(0, 1, 2), torch.zeros(0, data[1].size(1), 2), torch.zeros(0, data[2].size(1))
                     for k in range(self.num_expert):
-                        _, score = self._fast_val(self.models[k], data=data, eval_type="softmax")
+                        _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
                         scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                     _, id = scores.min(1)
                     for k in range(self.num_expert):
@@ -223,7 +223,7 @@ class CVRPTrainer:
                 data = (torch.cat((nat_data[0], data[0]), dim=0), torch.cat((nat_data[1], data[1]), dim=0), torch.cat((nat_data[2], data[2]), dim=0))  # nat+adv
                 scores = torch.zeros(batch_size * 2, 0)
                 for k in range(self.num_expert):
-                    _, score = self._fast_val(self.models[k], data=data, eval_type="softmax")
+                    _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
                     scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                 self._update_model(data, scores, type="ins_exp_choice")
 
