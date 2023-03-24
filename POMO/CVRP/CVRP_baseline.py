@@ -277,12 +277,14 @@ if __name__ == "__main__":
             results_dir = os.path.join(opts.results_dir, "cvrp_{}".format(opts.method), dataset_basename)
             os.makedirs(results_dir, exist_ok=True)
 
-            out_file = os.path.join(results_dir, "{}{}{}-{}{}".format(
-                dataset_basename,
-                "offset{}".format(opts.offset) if opts.offset is not None else "",
-                "n{}".format(opts.n) if opts.n is not None else "",
-                opts.method, ext
-            ))
+            # out_file = os.path.join(results_dir, "{}{}{}-{}{}".format(
+            #     dataset_basename,
+            #     "offset{}".format(opts.offset) if opts.offset is not None else "",
+            #     "n{}".format(opts.n) if opts.n is not None else "",
+            #     opts.method, ext
+            # ))
+            dir, filename = os.path.split(dataset_path)
+            out_file = os.path.join(dir, "{}_{}".format(opts.method, filename))
         else:
             out_file = opts.o
 

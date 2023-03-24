@@ -411,8 +411,8 @@ class CVRP_Routing(nn.Module):
         self.W1 = nn.Linear(2, embedding_dim)
         self.W2 = nn.Linear(3, embedding_dim)
         self.W3 = nn.Linear(num_expert, embedding_dim)
-        self.W4 = nn.Linear(embedding_dim*2, embedding_dim)
-        self.Wq = nn.Linear(embedding_dim * num_expert, embedding_dim, bias=False)
+        # self.W4 = nn.Linear(embedding_dim*2, embedding_dim)
+        self.Wq = nn.Linear(embedding_dim * 2, embedding_dim, bias=False)
         self.Wk = nn.Linear(embedding_dim, embedding_dim, bias=False)
 
     def forward(self, x, state):
@@ -432,7 +432,7 @@ class CVRP_Routing(nn.Module):
         h = h.mean(1)
 
         state = self.W3(state)  # (batch_size, embedding_dim)
-        q = self.W4(torch.cat((h, state), dim=1))  # (batch_size, embedding_dim)
+        q = self.Wq(torch.cat((h, state), dim=1))  # (batch_size, embedding_dim)
         k = self.Wk(self.expert(torch.arange(self.num_expert)))  # (num_expert, embedding_dim)
         score = torch.matmul(q, k.transpose(0, 1)) / self.embedding_dim
         logits = self.logit_clipping * torch.tanh(score)  # (batch_size, num_expert)

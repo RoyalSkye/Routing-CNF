@@ -8,7 +8,7 @@ from CVRPEnv import CVRPEnv as Env
 from CVRPModel import CVRPModel as Model
 from CVRPModel import CVRP_Routing
 from CVRProblemDef import get_random_problems, generate_x_adv
-from CVRP_baseline import solve_hgs_log
+from CVRP_baseline import solve_hgs_log, get_hgs_executable
 from torch.optim import Adam as Optimizer
 from torch.optim.lr_scheduler import MultiStepLR as Scheduler
 
@@ -118,17 +118,17 @@ class CVRPTrainer:
             dir = "../../data/CVRP"
             paths = ["cvrp100_uniform.pkl", "adv_cvrp100_uniform.pkl"]
             val_episodes, score_list, gap_list = 1000, [], []
-            data = load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]
-            depot_xy, node_xy, ori_node_demand, capacity = [i[0] for i in data], [i[1] for i in data], [i[2] for i in data], [i[3] for i in data]
-            depot_xy, node_xy, ori_node_demand, capacity = torch.Tensor(depot_xy), torch.Tensor(node_xy), torch.Tensor(ori_node_demand), torch.Tensor(capacity)
             # generate adv dataset based on the status of current model
-            self._generate_cur_adv((depot_xy, node_xy, ori_node_demand, capacity))
+            # data = load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]
+            # depot_xy, node_xy, ori_node_demand, capacity = [i[0] for i in data], [i[1] for i in data], [i[2] for i in data], [i[3] for i in data]
+            # depot_xy, node_xy, ori_node_demand, capacity = torch.Tensor(depot_xy), torch.Tensor(node_xy), torch.Tensor(ori_node_demand), torch.Tensor(capacity)
+            # self._generate_cur_adv((depot_xy, node_xy, ori_node_demand, capacity))
 
             for path in paths:
                 score, gap = self._val_and_stat(dir, path, batch_size=500, val_episodes=val_episodes)
                 score_list.append(score); gap_list.append(gap)
-            score, gap = self._val_and_stat("./", "adv_tmp.pkl", batch_size=500, val_episodes=val_episodes * self.num_expert)
-            score_list.append(score); gap_list.append(gap)
+            # score, gap = self._val_and_stat("./", "adv_tmp.pkl", batch_size=500, val_episodes=val_episodes * self.num_expert)
+            # score_list.append(score); gap_list.append(gap)
             self.result_log.append('val_score', epoch, score_list)
             self.result_log.append('val_gap', epoch, gap_list)
 
@@ -212,9 +212,9 @@ class CVRPTrainer:
                         scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                     # print(scores)  # the scores will not be the same even at the beginning, since the policy is stochastic
                     if self.routing_model:
-                        self._update_model_routing(data, scores, type="exp_choice")
+                        self._update_model_routing(data, scores, type="exp_choice_with_best")
                     else:
-                        self._update_model(data, scores, type="exp_choice")
+                        self._update_model_heuristic(data, scores, type="ins_exp_choice")
 
                 # 2. collaborate to generate adversarial examples (global)
                 data = nat_data
@@ -239,9 +239,9 @@ class CVRPTrainer:
                     _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
                     scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                 if self.routing_model:
-                    self._update_model_routing(data, scores, type="exp_choice")
+                    self._update_model_routing(data, scores, type="exp_choice_with_best")
                 else:
-                    self._update_model(data, scores, type="exp_choice")
+                    self._update_model_heuristic(data, scores, type="ins_exp_choice")
 
             else:
                 raise NotImplementedError
@@ -291,7 +291,7 @@ class CVRPTrainer:
 
         return -max_pomo_reward.float().detach(), loss.mean(1)  # (batch), (batch)
 
-    def _update_model(self, data, scores, type="ins_choice"):
+    def _update_model_heuristic(self, data, scores, type="ins_choice"):
         """
             Updating model using both nat_data and adv_data.
             Routing Mechanism:
@@ -365,6 +365,11 @@ class CVRPTrainer:
             # id2 = torch.multinomial(probs2.T, num_samples=batch_size // 2, replacement=False).T
             id1 = torch.topk(probs1, 1, dim=1, largest=True, sorted=False)[1].squeeze(1)
             id2 = torch.topk(probs2, batch_size // 2, dim=0, largest=True, sorted=False)[1]
+        elif type == "exp_choice_with_best":
+            # selected = torch.zeros(batch_size, 0).to(self.device)
+            probs = torch.softmax(logits, dim=0)
+            _, id1 = scores.min(1)
+            id2 = torch.topk(probs, batch_size // 2, dim=0, largest=True, sorted=False)[1]
 
         # routing and training
         for j in range(self.num_expert):
@@ -372,9 +377,11 @@ class CVRPTrainer:
                 mask = (id == j)
             elif type == "exp_choice":
                 mask = id[:, j]
-            elif type == "ins_exp_choice":
+            elif type in ["ins_exp_choice", "exp_choice_with_best"]:
                 mask1, mask2 = (id1 == j), torch.zeros(batch_size).bool().scatter_(0, id2[:, j], 1)
                 mask = mask1 | mask2
+                # selected = torch.cat((selected, mask.unsqueeze(1)), dim=1)
+                # print(mask.sum())
             else:
                 raise NotImplementedError
             selected_data = (depot_xy[mask], node_xy[mask], node_demand[mask])
@@ -405,6 +412,12 @@ class CVRPTrainer:
             reward1, reward2 = torch.gather(reward, 1, id1.unsqueeze(1)), torch.gather(reward, 0, id2)
             log_prob1, log_prob2 = torch.gather(log_prob1, 1, id1.unsqueeze(1)), torch.gather(log_prob2, 0, id2)
             routing_loss = alpha * (-reward1 * log_prob1).mean() + (1 - alpha) * (-reward2 * log_prob2).mean()
+        elif type == "exp_choice_with_best":
+            log_prob = torch.log(probs)
+            # selected = selected.long()
+            # routing_loss = (-reward * log_prob * selected).mean()
+            reward, log_prob = torch.gather(reward, 0, id2), torch.gather(log_prob, 0, id2)
+            routing_loss = (-reward * log_prob).mean()
         else:
             raise NotImplementedError
 
@@ -424,7 +437,7 @@ class CVRPTrainer:
             node_demand = node_demand / capacity.view(-1, 1)
             data = (depot_xy, node_xy, node_demand)
 
-        env = Env(**{'problem_size': data[1].size(1), 'pomo_size': data[1].size(1)})
+        env = Env(**{'problem_size': data[1].size(1), 'pomo_size': data[1].size(1), 'device': self.device})
         batch_size = data[0].size(0)
 
         model.eval()

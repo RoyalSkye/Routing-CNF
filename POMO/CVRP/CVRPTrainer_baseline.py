@@ -7,7 +7,7 @@ from logging import getLogger
 from CVRPEnv import CVRPEnv as Env
 from CVRPModel import CVRPModel as Model
 from CVRProblemDef import get_random_problems, generate_x_adv
-from CVRP_baseline import solve_hgs_log
+from CVRP_baseline import solve_hgs_log, get_hgs_executable
 from torch.optim import Adam as Optimizer
 from torch.optim.lr_scheduler import MultiStepLR as Scheduler
 
@@ -110,17 +110,17 @@ class CVRPTrainer:
             dir = "../../data/CVRP"
             paths = ["cvrp100_uniform.pkl", "adv_cvrp100_uniform.pkl"]
             val_episodes, score_list, gap_list = 1000, [], []
-            data = load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]
-            depot_xy, node_xy, ori_node_demand, capacity = [i[0] for i in data], [i[1] for i in data], [i[2] for i in data], [i[3] for i in data]
-            depot_xy, node_xy, ori_node_demand, capacity = torch.Tensor(depot_xy), torch.Tensor(node_xy), torch.Tensor(ori_node_demand), torch.Tensor(capacity)
             # generate adv dataset based on the status of current model
-            self._generate_cur_adv((depot_xy, node_xy, ori_node_demand, capacity))
+            # data = load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]
+            # depot_xy, node_xy, ori_node_demand, capacity = [i[0] for i in data], [i[1] for i in data], [i[2] for i in data], [i[3] for i in data]
+            # depot_xy, node_xy, ori_node_demand, capacity = torch.Tensor(depot_xy), torch.Tensor(node_xy), torch.Tensor(ori_node_demand), torch.Tensor(capacity)
+            # self._generate_cur_adv((depot_xy, node_xy, ori_node_demand, capacity))
 
             for path in paths:
                 score, gap = self._val_and_stat(dir, path, batch_size=500, val_episodes=val_episodes)
                 score_list.append(score); gap_list.append(gap)
-            score, gap = self._val_and_stat("./", "adv_tmp.pkl", batch_size=500, val_episodes=val_episodes * self.num_expert)
-            score_list.append(score); gap_list.append(gap)
+            # score, gap = self._val_and_stat("./", "adv_tmp.pkl", batch_size=500, val_episodes=val_episodes * self.num_expert)
+            # score_list.append(score); gap_list.append(gap)
             self.result_log.append('val_score', epoch, score_list)
             self.result_log.append('val_gap', epoch, gap_list)
 
@@ -202,7 +202,7 @@ class CVRPTrainer:
                             https://github.com/wondergo2017/TSP-HAC
                         """
                         depot, node, demand = adv_data
-                        idx = torch.randperm(hac_data.size(0))[:batch_size]
+                        idx = torch.randperm(depot.size(0) * 2)[:batch_size]
                         hac_data = (torch.cat((depot_xy, depot), dim=0)[idx], torch.cat((node_xy, node), dim=0)[idx], torch.cat((node_demand, demand), dim=0)[idx])  # nat+adv
                         avg_score, avg_loss = self._hac_train_one_batch(self.models[i], hac_data, epoch=epoch)
                     else:
@@ -317,7 +317,7 @@ class CVRPTrainer:
             node_demand = node_demand / capacity.view(-1, 1)
             data = (depot_xy, node_xy, node_demand)
 
-        env = Env(**{'problem_size': data[1].size(1), 'pomo_size': data[1].size(1)})
+        env = Env(**{'problem_size': data[1].size(1), 'pomo_size': data[1].size(1), 'device': self.device})
         batch_size = data[0].size(0)
 
         model.eval()

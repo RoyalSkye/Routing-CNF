@@ -53,7 +53,7 @@ trainer_params = {
     'pretrain_epochs': 30500,
     'train_episodes': 10 * 1000,
     'num_expert': 3,
-    'train_batch_size': 32,
+    'train_batch_size': 64,
     'logging': {
         'model_save_interval': 100,
         'img_save_interval': 100,

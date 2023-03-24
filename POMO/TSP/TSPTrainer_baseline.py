@@ -109,15 +109,15 @@ class TSPTrainer:
             dir = "../../data/TSP"
             paths = ["tsp100_uniform.pkl", "adv_tsp100_uniform.pkl"]
             val_episodes, score_list, gap_list = 1000, [], []
-            nat_data = torch.Tensor(load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]).to(self.device)
             # generate adv dataset based on the status of current model
-            self._generate_cur_adv(nat_data)
+            # nat_data = torch.Tensor(load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]).to(self.device)
+            # self._generate_cur_adv(nat_data)
 
             for path in paths:
                 score, gap = self._val_and_stat(dir, path, batch_size=500, val_episodes=val_episodes)
                 score_list.append(score); gap_list.append(gap)
-            score, gap = self._val_and_stat("./", "adv_tmp.pkl", batch_size=500, val_episodes=val_episodes * self.num_expert)
-            score_list.append(score); gap_list.append(gap)
+            # score, gap = self._val_and_stat("./", "adv_tmp.pkl", batch_size=500, val_episodes=val_episodes * self.num_expert)
+            # score_list.append(score); gap_list.append(gap)
             self.result_log.append('val_score', epoch, score_list)
             self.result_log.append('val_gap', epoch, gap_list)
 
@@ -300,7 +300,7 @@ class TSPTrainer:
     def _fast_val(self, model, data=None, path=None, offset=0, val_episodes=1000, aug_factor=1, eval_type="argmax"):
         data = torch.Tensor(load_dataset(path, disable_print=True)[offset: offset + val_episodes]) if data is None else data
         data = data.to(self.device)
-        env = Env(**{'problem_size': data.size(1), 'pomo_size': data.size(1)})
+        env = Env(**{'problem_size': data.size(1), 'pomo_size': data.size(1), 'device': self.device})
         batch_size = data.size(0)
 
         model.eval()
