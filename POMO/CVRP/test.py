@@ -48,7 +48,7 @@ tester_params = {
     'aug_factor': 8,
     'aug_batch_size': 100,
     'test_set_path': '../../data/CVRP/cvrp100_uniform.pkl',
-    'test_set_opt_sol_path': '../../data/CVRP/concorde_cvrp100_uniform.pkl'
+    'test_set_opt_sol_path': '../../data/CVRP/hgs_cvrp100_uniform.pkl'
 }
 
 if tester_params['augmentation_enable']:

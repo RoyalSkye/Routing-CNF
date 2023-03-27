@@ -72,8 +72,7 @@ class CVRPTester:
             model_state_dict = checkpoint['model_state_dict']
             # self.models = [self.models[i].load_state_dict(model_state_dict[i]) for i in range(self.num_expert)]  # '_IncompatibleKeys' object has no attribute 'eval'
             for i in range(self.num_expert):
-                model = self.models[i]
-                model.load_state_dict(model_state_dict[i])
+                self.models[i].load_state_dict(model_state_dict[i])
 
         # utility
         self.time_estimator = TimeEstimator()

@@ -79,7 +79,8 @@ if __name__ == "__main__":
     else:
         models = [Model(**model_params) for _ in range(opts.num_expert)]
         model_state_dict = checkpoint['model_state_dict']
-        models = [models[i].load_state_dict(model_state_dict[i]) for i in range(opts.num_expert)]
+        for i in range(opts.num_expert):
+            models[i].load_state_dict(model_state_dict[i])
 
     # generate adversarial examples (only coordinates of nods are adversarially updated)
     start_time = time.time()
@@ -100,7 +101,7 @@ if __name__ == "__main__":
     # obtain (sub-)opt solution using HGS
     start_time = time.time()
     params = argparse.ArgumentParser()
-    params.cpus, params.n, params.progress_bar_mininterval = 32, None, 0.1
+    params.cpus, params.n, params.progress_bar_mininterval = None, None, 0.1
     dataset = [attr.cpu().tolist() for attr in adv_data]
     dataset = [(dataset[0][i][0], dataset[1][i], [int(d) for d in dataset[2][i]], int(dataset[3][i])) for i in range(adv_data[0].size(0))]
     executable = get_hgs_executable()
@@ -118,4 +119,4 @@ if __name__ == "__main__":
     print("Calculated total duration: {}".format(timedelta(seconds=int(np.sum(durations) / parallelism))))
 
     results = [(i[0], i[1]) for i in results]
-    save_dataset(results, "{}/concorde_adv_{}".format(dir, filename))
+    save_dataset(results, "{}/hgs_adv_{}".format(dir, filename))

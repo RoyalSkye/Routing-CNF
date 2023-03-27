@@ -31,7 +31,7 @@ def augment_xy_data_by_8_fold(problems):
     return aug_problems
 
 
-def generate_x_adv(model, data, eps=10.0, num_steps=1, return_opt=False):
+def generate_x_adv(model, nat_data, eps=10.0, num_steps=1, return_opt=False):
     """
         Generate adversarial data based on the current model.
         See also: "Learning to Solve Travelling Salesman Problem with Hardness-adaptive Curriculum" in AAAI 2022.
@@ -44,6 +44,7 @@ def generate_x_adv(model, data, eps=10.0, num_steps=1, return_opt=False):
         xy_ = (xy_ - xy_.min(dim=1, keepdims=True)[0]) / (xy_.max(dim=1, keepdims=True)[0] - xy_.min(dim=1, keepdims=True)[0])
         return xy_
 
+    data = nat_data.clone().detach()
     if eps == 0: return data
     # generate x_adv
     model.eval()

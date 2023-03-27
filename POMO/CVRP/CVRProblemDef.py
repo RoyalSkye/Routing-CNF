@@ -53,7 +53,7 @@ def augment_xy_data_by_8_fold(xy_data):
     return aug_xy_data
 
 
-def generate_x_adv(model, data, eps=10.0, num_steps=1):
+def generate_x_adv(model, nat_data, eps=10.0, num_steps=1):
     """
         Generate adversarial data based on the current model.
         Note: We only modify the continuous variable (i.e., coordinate) in CVRP.
@@ -68,11 +68,12 @@ def generate_x_adv(model, data, eps=10.0, num_steps=1):
         xy_ = (xy_ - xy_.min(dim=1, keepdims=True)[0]) / (xy_.max(dim=1, keepdims=True)[0] - xy_.min(dim=1, keepdims=True)[0])
         return xy_
 
-    if eps == 0: return data
+    if eps == 0: return nat_data
     # generate x_adv
     model.eval()
     model.set_eval_type("softmax")
-    depot_xy, node_xy, node_demand = data
+    depot_xy, node_xy, node_demand = nat_data
+    depot_xy, node_xy, node_demand = depot_xy.clone().detach(), node_xy.clone().detach(), node_demand.clone().detach()
     aug_factor, batch_size = 1, node_xy.size(0)
     env = Env(**{'problem_size': node_xy.size(1), 'pomo_size': node_xy.size(1)})
     with torch.enable_grad():

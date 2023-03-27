@@ -86,8 +86,7 @@ class TSPTrainer:
             # self.pre_model.load_state_dict(checkpoint['model_state_dict'])
             # TODO: Only load Encoder?
             for i in range(self.num_expert):
-                model = self.models[i]
-                model.load_state_dict(checkpoint['model_state_dict'])
+                self.models[i].load_state_dict(checkpoint['model_state_dict'])
             self.logger.info('Pretrain model loaded successfully from {}'.format(checkpoint_fullname))
 
         else:  # pretrain (phase 1) from scratch
@@ -96,8 +95,7 @@ class TSPTrainer:
                 self._train_one_epoch(epoch, mode="nat")
             model_state_dict = self.pre_model.state_dict()
             for i in range(self.num_expert):
-                model = self.models[i]
-                model.load_state_dict(model_state_dict)
+                self.models[i].load_state_dict(model_state_dict)
             del self.pre_model
             self.logger.info('Pretraining finished.')
 

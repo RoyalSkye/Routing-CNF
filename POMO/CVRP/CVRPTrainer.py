@@ -86,8 +86,7 @@ class CVRPTrainer:
             checkpoint = torch.load(checkpoint_fullname, map_location=device)
             # TODO: Only load Encoder?
             for i in range(self.num_expert):
-                model = self.models[i]
-                model.load_state_dict(checkpoint['model_state_dict'])
+                self.models[i].load_state_dict(checkpoint['model_state_dict'])
             self.logger.info('Pretrain model loaded successfully from {}'.format(checkpoint_fullname))
 
         else:  # pretrain (phase 1) from scratch
@@ -96,8 +95,7 @@ class CVRPTrainer:
                 self._train_one_epoch(epoch, mode="nat")
             model_state_dict = self.pre_model.state_dict()
             for i in range(self.num_expert):
-                model = self.models[i]
-                model.load_state_dict(model_state_dict)
+                self.models[i].load_state_dict(model_state_dict)
             del self.pre_model
             self.logger.info('Pretraining finished.')
 
@@ -357,7 +355,6 @@ class CVRPTrainer:
             probs = torch.softmax(logits, dim=0)
             # id = torch.multinomial(probs.T, num_samples=batch_size // 2, replacement=False).T  # (batch_size//2, num_expert)
             id = torch.topk(probs, batch_size // 2, dim=0, largest=True, sorted=False)[1]
-            print(probs)
         elif type == "ins_exp_choice":
             alpha = 0.5
             probs1, probs2 = torch.softmax(logits, dim=1), torch.softmax(logits, dim=0)
@@ -490,12 +487,12 @@ class CVRPTrainer:
         results, _ = run_all_in_pool(run_func, "./HGS_result", dataset, params, use_multiprocessing=False)
         os.system("rm -rf ./HGS_result")
         results = [(i[0], i[1]) for i in results]
-        save_dataset(results, "./concorde_adv_tmp.pkl")
+        save_dataset(results, "./hgs_adv_tmp.pkl")
 
     def _val_and_stat(self, dir, val_path, batch_size=500, val_episodes=1000):
         no_aug_score_list, aug_score_list, no_aug_gap_list, aug_gap_list = [], [], [], []
         no_aug_scores, aug_scores = torch.zeros(val_episodes, 0), torch.zeros(val_episodes, 0)
-        opt_sol = load_dataset(os.path.join(dir, "concorde_{}".format(val_path)), disable_print=True)[: val_episodes]
+        opt_sol = load_dataset(os.path.join(dir, "hgs_{}".format(val_path)), disable_print=True)[: val_episodes]
         opt_sol = [i[0] for i in opt_sol]
         for i in range(self.num_expert):
             episode, no_aug_score, aug_score = 0, torch.zeros(0).to(self.device), torch.zeros(0).to(self.device)

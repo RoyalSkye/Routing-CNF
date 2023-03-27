@@ -35,7 +35,7 @@ def generate_adv_dataset(model, data, eps_min=1, eps_max=100, num_steps=1):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_expert", type=int, default=1, help="Number of experts")
+    parser.add_argument("--num_expert", type=int, default=3, help="Number of experts")
     parser.add_argument("--model_path", type=str, default='../../pretrained/POMO-TSP/checkpoint-3000.pt', help="Path of the checkpoint to load")
     parser.add_argument("--test_set_path", type=str, default='../../data/TSP/tsp100_uniform.pkl', help="Filename of the dataset(s) to evaluate")
     parser.add_argument('--test_episodes', type=int, default=1000, help="Number of instances to process")
@@ -69,7 +69,8 @@ if __name__ == "__main__":
     else:
         models = [Model(**model_params) for _ in range(opts.num_expert)]
         model_state_dict = checkpoint['model_state_dict']
-        models = [models[i].load_state_dict(model_state_dict[i]) for i in range(opts.num_expert)]
+        for i in range(opts.num_expert):
+            models[i].load_state_dict(model_state_dict[i])
 
     # generate adversarial examples
     start_time = time.time()
@@ -84,7 +85,7 @@ if __name__ == "__main__":
     # obtain (sub-)opt solution using Concorde
     start_time = time.time()
     params = argparse.ArgumentParser()
-    params.cpus, params.n, params.progress_bar_mininterval = 32, None, 0.1
+    params.cpus, params.n, params.progress_bar_mininterval = None, None, 0.1
     dataset = [(instance.cpu().numpy(),) for instance in adv_data]
     executable = os.path.abspath(os.path.join('concorde', 'concorde', 'TSP', 'concorde'))
     def run_func(args):
