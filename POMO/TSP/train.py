@@ -6,6 +6,7 @@ import logging
 from utils.utils import create_logger, copy_all_src
 from utils.functions import seed_everything
 from TSPTrainer import TSPTrainer as Trainer
+from TSPTrainer_efficient import TSPTrainer as Trainer_efficient
 from TSPTrainer_baseline import TSPTrainer as Trainer_baseline
 
 DEBUG_MODE = False
@@ -47,9 +48,9 @@ trainer_params = {
     'use_cuda': USE_CUDA,
     'cuda_device_num': CUDA_DEVICE_NUM,
     'seed': 1234,
-    'method': 'ours',  # choose from ['ours', 'baseline', 'baseline_hac']
+    'method': 'ours',  # choose from ['ours', 'ours_efficient', 'baseline', 'baseline_hac']
     'routing_model': True,
-    'epochs': 40,
+    'epochs': 50,
     'pretrain_epochs': 3000,
     'train_episodes': 100 * 1000,
     'num_expert': 3,
@@ -107,6 +108,8 @@ def main():
     print(">> Starting {} Training, Routing network {}".format(trainer_params['method'], trainer_params['routing_model']))
     if trainer_params['method'] == "ours":
         trainer = Trainer(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
+    elif trainer_params['method'] == "ours_efficient":
+        trainer = Trainer_efficient(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
     else:
         trainer = Trainer_baseline(env_params=env_params, model_params=model_params, optimizer_params=optimizer_params, trainer_params=trainer_params, adv_params=adv_params)
 

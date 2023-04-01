@@ -210,7 +210,7 @@ class CVRPTrainer:
                         scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                     # print(scores)  # the scores will not be the same even at the beginning, since the policy is stochastic
                     if self.routing_model:
-                        self._update_model_routing(data, scores, type="exp_choice_with_best")
+                        self._update_model_routing(data, scores, type="exp_choice")
                     else:
                         self._update_model_heuristic(data, scores, type="ins_exp_choice")
 
@@ -237,7 +237,7 @@ class CVRPTrainer:
                     _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
                     scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                 if self.routing_model:
-                    self._update_model_routing(data, scores, type="exp_choice_with_best")
+                    self._update_model_routing(data, scores, type="exp_choice")
                 else:
                     self._update_model_heuristic(data, scores, type="ins_exp_choice")
 
