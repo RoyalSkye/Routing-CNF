@@ -34,9 +34,9 @@ def get_config():
 
     parser.add_argument('-problem', default="TSP", type=str, choices=['TSP', 'CVRP'])
     parser.add_argument('-method', default="eas-emb", type=str, choices=['eas-emb', 'eas-lay', 'eas-tab'], help="EAS method")
-    parser.add_argument('-model_path', default="../pretrained/pomo_pretrained/checkpoint-30500.pt", type=str, help="Path of the trained model weights")
-    parser.add_argument('-instances_path', default="../data/TSP/Size_Distribution/tsp200_rotation.pkl", type=str, help="Path of the instances")
-    parser.add_argument('-sol_path', default="../data/TSP/Size_Distribution/concorde/tsp200_rotationoffset0n1000-concorde.pkl", type=str, help="Path of the optimal sol")
+    parser.add_argument('-model_path', default="../../pretrained/POMO-TSP/checkpoint-3000.pt", type=str, help="Path of the trained model weights")
+    parser.add_argument('-instances_path', default="../../data/tsplib", type=str, help="Path of the instances")
+    parser.add_argument('-sol_path', default="../../data/tsplib", type=str, help="Path of the optimal sol")
     parser.add_argument('-num_instances', default=1000, type=int, help="Maximum number of instances that should be solved")
     parser.add_argument('-instances_offset', default=0, type=int)
     parser.add_argument('-round_distances', default=False, action='store_true', help="Round distances to the nearest integer. Required to solve .vrp instances")
@@ -46,8 +46,9 @@ def get_config():
     parser.add_argument('-batch_size', default=150, type=int)  # Set to 1 for single instance search
     parser.add_argument('-p_runs', default=1, type=int)  # If batch_size is 1, set this to > 1 to do multiple runs for the instance in parallel
     parser.add_argument('-output_path', default="EAS_results", type=str)
-    parser.add_argument('-norm', default="batch_no_track", choices=['instance', 'batch', 'batch_no_track', 'none'], type=str)
-    parser.add_argument('-gpu_id', default=2, type=int)
+    parser.add_argument('-norm', default="instance", choices=['instance', 'batch', 'batch_no_track', 'none'], type=str)
+    parser.add_argument('-num_expert', default=3, type=int)
+    parser.add_argument('-gpu_id', default=0, type=int)
     parser.add_argument('-seed', default=2023, type=int, help="random seed")
 
     # EAS-Emb and EAS-Lay parameters
@@ -170,7 +171,10 @@ def search(run_id, config):
     else:
         raise NotImplementedError("Unknown problem")
     checkpoint = torch.load(config.model_path, map_location="cuda")
-    model.load_state_dict(checkpoint['model_state_dict'])
+    if config.num_expert != 1:
+        model.load_state_dict(checkpoint['model_state_dict'][config.model_id])
+    else:
+        model.load_state_dict(checkpoint['model_state_dict'])
     # optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     model.eval()
 
@@ -247,7 +251,9 @@ def search(run_id, config):
         logging.info(f"Runtime: {runtime}s")
         logging.info("MEM: " + str(cutorch.max_memory_reserved(config.gpu_id) / 1024 / 1024) + "MB")
         logging.info(f"Num. instances: {len(perf)}")
-        print(">> Solving {}, with sol {}".format(config.instances_path, perf))
+        print(">> Solved {}, with sol {}".format(config.instances_path, perf))
+
+    return np.mean(perf)
 
 
 def seed_everything(seed=2022):
@@ -263,4 +269,19 @@ if __name__ == '__main__':
     seed_everything(config.seed)
     if torch.cuda.is_available():
         torch.cuda.set_device(config.gpu_id)
-    search(run_id, config)
+
+    sol_list, path_list = [], []
+    if os.path.isdir(config.instances_path):
+        path_list = [os.path.join(config.instances_path, f) for f in sorted(os.listdir(config.instances_path))]
+    else:
+        path_list = config.instances_path
+
+    for path in path_list:
+        config.instances_path = path
+        best_sol = 10 ** 8
+        for i in range(config.num_expert):
+            config.model_id = i
+            sol = search(run_id, config)
+            best_sol = min(best_sol, sol)
+        sol_list.append(best_sol)
+    print(len(sol_list), sol_list)

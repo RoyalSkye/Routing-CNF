@@ -1,22 +1,18 @@
-import os, random
-import pickle
-import argparse
+import os, glob
 import torch
 from logging import getLogger
-
-from CVRPEnv import CVRPEnv as Env
-from CVRPModel import CVRPModel as Model
-from CVRProblemDef import get_random_problems, generate_x_adv
-from CVRP_baseline import solve_hgs_log, get_hgs_executable
+from ATSPEnv import ATSPEnv as Env
+from ATSPModel import ATSPModel as Model
+from attacker_model import ActorCritic
+from ATSPTester import ATSPTester as Tester
+from ATSProblemDef import get_random_problems, load_single_problem_from_file, generate_x_adv
 from torch.optim import Adam as Optimizer
 from torch.optim.lr_scheduler import MultiStepLR as Scheduler
-
-from generate_adv import generate_adv_dataset
 from utils.utils import *
-from utils.functions import *
+from utils.functions import load_dataset, save_dataset
 
 
-class CVRPTrainer:
+class ATSPTrainer:
     def __init__(self, env_params, model_params, optimizer_params, trainer_params, adv_params):
 
         # save arguments
@@ -56,12 +52,47 @@ class CVRPTrainer:
         self.optimizers = [Optimizer(model.parameters(), **self.optimizer_params['optimizer']) for model in self.models]
         self.schedulers = [Scheduler(optimizer, **self.optimizer_params['scheduler']) for optimizer in self.optimizers]
 
+        # load data
+        if self.trainer_params["fixed_dataset"]:
+            nat_path, adv_path = "./data/train_n20", "./data/train_adv_n20"
+            adv_path_1, adv_path_2 = None, None
+            # adv_path_1, adv_path_2 = "./data/AT_train/train_adv_n20_1", "./data/AT_train/train_adv_n20_2"
+            self.nat_data = torch.zeros(0, self.env_params['node_cnt'], self.env_params['node_cnt'])
+            self.adv_data = torch.zeros(0, self.env_params['node_cnt'], self.env_params['node_cnt'])
+            for fp in sorted(glob.iglob(os.path.join(nat_path, "*.atsp"))):
+                data = load_single_problem_from_file(fp, node_cnt=self.env_params['node_cnt'], scaler=1000 * 1000)
+                self.nat_data = torch.cat((self.nat_data, data.unsqueeze(0)), dim=0)
+            for fp in sorted(glob.iglob(os.path.join(adv_path, "*.atsp"))):
+                data = load_single_problem_from_file(fp, node_cnt=self.env_params['node_cnt'], scaler=1000 * 1000)
+                self.adv_data = torch.cat((self.adv_data, data.unsqueeze(0)), dim=0)
+            if adv_path_1 is not None:
+                for fp in sorted(glob.iglob(os.path.join(adv_path_1, "*.atsp"))):
+                    data = load_single_problem_from_file(fp, node_cnt=self.env_params['node_cnt'], scaler=1000 * 1000)
+                    self.adv_data = torch.cat((self.adv_data, data.unsqueeze(0)), dim=0)
+            if adv_path_2 is not None:
+                for fp in sorted(glob.iglob(os.path.join(adv_path_2, "*.atsp"))):
+                    data = load_single_problem_from_file(fp, node_cnt=self.env_params['node_cnt'], scaler=1000 * 1000)
+                    self.adv_data = torch.cat((self.adv_data, data.unsqueeze(0)), dim=0)
+            self.training_data = self.adv_data
+            print(self.training_data.size())
+
+        # load attacker
+        self.attacker = None
+        if not self.trainer_params["fixed_dataset"]:
+            attack_params = self.adv_params["node_feature_dim"], self.adv_params["node_output_size"], self.adv_params["batch_norm"], self.adv_params["one_hot_degree"], self.adv_params["gnn_layers"]
+            self.attacker = [ActorCritic(*attack_params).to(self.device) for _ in range(self.num_expert)]
+            for i in range(self.num_expert):
+                checkpoint = torch.load(self.adv_params['path_{}'.format(i)], map_location=self.device)
+                attacker = self.attacker[i]
+                attacker.load_state_dict(checkpoint, strict=True)
+            print(">> Load attacker from {}".format(self.adv_params['path']))
+
         # Restore
         self.start_epoch = 1
         model_load = trainer_params['model_load']
         pretrain_load = trainer_params['pretrain_load']
         if model_load['enable']:
-            checkpoint_fullname = '{path}/checkpoint-{epoch}.pt'.format(**model_load)
+            checkpoint_fullname = '{path}/checkpoint-{n}-{epoch}.pt'.format(**model_load)
             checkpoint = torch.load(checkpoint_fullname, map_location=device)
             model_state_dict = checkpoint['model_state_dict']
             optimizer_state_dict = checkpoint['optimizer_state_dict']
@@ -75,7 +106,7 @@ class CVRPTrainer:
             self.logger.info('Checkpoint loaded successfully from {}'.format(checkpoint_fullname))
 
         elif pretrain_load['enable']:  # (Only) Load pretrain model
-            checkpoint_fullname = '{path}/checkpoint-{epoch}.pt'.format(**pretrain_load)
+            checkpoint_fullname = '{path}/checkpoint-{n}-{epoch}.pt'.format(**pretrain_load)
             checkpoint = torch.load(checkpoint_fullname, map_location=device)
             for i in range(self.num_expert):
                 self.models[i].load_state_dict(checkpoint['model_state_dict'])
@@ -96,7 +127,7 @@ class CVRPTrainer:
 
     def run(self):
         self.time_estimator.reset(self.start_epoch)
-        for epoch in range(self.start_epoch, self.trainer_params['epochs'] + 1):
+        for epoch in range(self.start_epoch, self.trainer_params['epochs']+1):
             self.logger.info('=================================================================')
 
             # Train
@@ -105,40 +136,26 @@ class CVRPTrainer:
                 self.schedulers[i].step()
 
             # Validation
-            dir = "../../data/CVRP"
-            paths = ["cvrp100_uniform.pkl", "adv_cvrp100_uniform.pkl"]
-            val_episodes, score_list, gap_list = 1000, [], []
-            # generate adv dataset based on the status of current model
-            # data = load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]
-            # depot_xy, node_xy, ori_node_demand, capacity = [i[0] for i in data], [i[1] for i in data], [i[2] for i in data], [i[3] for i in data]
-            # depot_xy, node_xy, ori_node_demand, capacity = torch.Tensor(depot_xy), torch.Tensor(node_xy), torch.Tensor(ori_node_demand), torch.Tensor(capacity)
-            # self._generate_cur_adv((depot_xy, node_xy, ori_node_demand, capacity))
+            dirs = ["./data/test_n20", "./data/test_adv_n20"]
+            for dir in dirs:
+                self._val_and_stat(dir, batch_size=100, val_episodes=1000)
 
-            for path in paths:
-                score, gap = self._val_and_stat(dir, path, batch_size=500, val_episodes=val_episodes)
-                score_list.append(score); gap_list.append(gap)
-            # score, gap = self._val_and_stat("./", "adv_tmp.pkl", batch_size=500, val_episodes=val_episodes * self.num_expert)
-            # score_list.append(score); gap_list.append(gap)
-            self.result_log.append('val_score', epoch, score_list)
-            self.result_log.append('val_gap', epoch, gap_list)
-
-            ############################
             # Logs & Checkpoint
-            ############################
+            train_score, train_loss = 0, 0
+            self.result_log.append('train_score', epoch, train_score)
+            self.result_log.append('train_loss', epoch, train_loss)
             elapsed_time_str, remain_time_str = self.time_estimator.get_est_string(epoch, self.trainer_params['epochs'])
             self.logger.info("Epoch {:3d}/{:3d}: Time Est.: Elapsed[{}], Remain[{}]".format(epoch, self.trainer_params['epochs'], elapsed_time_str, remain_time_str))
 
             all_done = (epoch == self.trainer_params['epochs'])
             model_save_interval = self.trainer_params['logging']['model_save_interval']
-            # img_save_interval = self.trainer_params['logging']['img_save_interval']
+            img_save_interval = self.trainer_params['logging']['img_save_interval']
 
             if epoch > 1:  # save latest images, every epoch
                 self.logger.info("Saving log_image")
                 image_prefix = '{}/latest'.format(self.result_folder)
-                # util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_1'], self.result_log, labels=['train_score'])
-                # util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_2'], self.result_log, labels=['train_loss'])
-                util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_1'], self.result_log, labels=['val_score'])
-                util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_1'], self.result_log, labels=['val_gap'])
+                util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_1'], self.result_log, labels=['train_score'])
+                util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_2'], self.result_log, labels=['train_loss'])
 
             if all_done or (epoch % model_save_interval) == 0:
                 self.logger.info("Saving trained_model")
@@ -151,32 +168,30 @@ class CVRPTrainer:
                 }
                 torch.save(checkpoint_dict, '{}/checkpoint-{}.pt'.format(self.result_folder, epoch))
 
+            if all_done or (epoch % img_save_interval) == 0:
+                image_prefix = '{}/img/checkpoint-{}'.format(self.result_folder, epoch)
+                util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_1'],
+                                    self.result_log, labels=['train_score'])
+                util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_2'],
+                                    self.result_log, labels=['train_loss'])
+
             if all_done:
                 self.logger.info(" *** Training Done *** ")
-                # self.logger.info("Now, printing log array...")
-                # util_print_log_array(self.logger, self.result_log)
+                self.logger.info("Now, printing log array...")
+                util_print_log_array(self.logger, self.result_log)
 
     def _train_one_epoch(self, epoch, mode="nat"):
-        """
-            Baseline Method.
-            Phase 1 mode == "nat":
-                Pre-training one model on natural instances.
-            Phase 2 mode == "adv":
-                One pretrain model -> several experts
-                    - Generating adversarial instances;
-                    - Train on (nat+)adv ins. generated by itself
-        """
-        # score_AM, loss_AM = AverageMeter(), AverageMeter()
+
         episode = 0
         train_num_episode = self.trainer_params['train_episodes']
+        if self.trainer_params["fixed_dataset"]:
+            # train_num_episode = self.training_data.size(0)
+            self.training_data = self.training_data[torch.randperm(self.training_data.size(0))]
 
         while episode < train_num_episode:
             remaining = train_num_episode - episode
             batch_size = min(self.trainer_params['train_batch_size'], remaining)
-            nat_data = get_random_problems(batch_size, self.env_params['problem_size'])
-            depot_xy, node_xy, node_demand, capacity = nat_data
-            node_demand = node_demand / capacity.view(-1, 1)
-            nat_data = (depot_xy, node_xy, node_demand)
+            nat_data = get_random_problems(batch_size, self.env_params["node_cnt"], self.env_params["problem_gen_params"])
 
             if mode == "nat":
                 score, loss = self._train_one_batch(self.pre_model, nat_data)
@@ -185,27 +200,13 @@ class CVRPTrainer:
                 avg_loss.backward()
                 self.pre_optimizer.step()
             elif mode == "adv":
-                # generate adv_data
-                # Note: Could further add scheduler to control attack budget (e.g., curriculum way).
-                eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max']+1), 1)[0]
                 for i in range(self.num_expert):
-                    adv_data = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'])
-
-                    if self.trainer_params['method'] == "baseline":
-                        score, loss = self._train_one_batch(self.models[i], adv_data)  # (batch), (batch)
-                        avg_score, avg_loss = score.mean().item(), loss.mean()
-                    elif self.trainer_params['method'] == "baseline_hac":
-                        """
-                            Reimplementation of HAC, refer to "Learning to Solve Travelling Salesman Problem with Hardness-Adaptive Curriculum" - AAAI 2022
-                            https://github.com/wondergo2017/TSP-HAC
-                        """
-                        depot, node, demand = adv_data
-                        idx = torch.randperm(depot.size(0) * 2)[:batch_size]
-                        hac_data = (torch.cat((depot_xy, depot), dim=0)[idx], torch.cat((node_xy, node), dim=0)[idx], torch.cat((node_demand, demand), dim=0)[idx])  # nat+adv
-                        avg_score, avg_loss = self._hac_train_one_batch(self.models[i], hac_data, epoch=epoch)
+                    if self.trainer_params["fixed_dataset"]:
+                        adv_data = self.training_data[episode: episode + batch_size]
                     else:
-                        raise NotImplementedError
-
+                        adv_data = generate_x_adv(self.models[i], self.attacker[i], nat_data)
+                    score, loss = self._train_one_batch(self.models[i], adv_data)  # (batch), (batch)
+                    avg_score, avg_loss = score.mean().item(), loss.mean()
                     self.optimizers[i].zero_grad()
                     avg_loss.backward()
                     self.optimizers[i].step()
@@ -218,18 +219,17 @@ class CVRPTrainer:
         self.logger.info('Epoch {:3d}: Train ({:3.0f}%)'.format(epoch, 100. * episode / train_num_episode))
 
     def _train_one_batch(self, model, data):
-        """
-            Only for one forward pass.
-            Note: data should include depot_xy, node_xy, normalized node_demand.
-        """
+
+        # Prep
+        ###############################################
         model.train()
-        batch_size = data[0].size(0)
-        self.env.load_problems(batch_size, problems=data, aug_factor=1)
+        batch_size = data.size(0)
+        self.env.load_problems_manual(data)
         reset_state, _, _ = self.env.reset()
         model.pre_forward(reset_state)
 
         prob_list = torch.zeros(size=(batch_size, self.env.pomo_size, 0))
-        # shape: (batch, pomo, 0~problem)
+        # shape: (batch, pomo, 0~)
 
         # POMO Rollout
         ###############################################
@@ -257,71 +257,17 @@ class CVRPTrainer:
 
         return -max_pomo_reward.float().detach(), loss.mean(1)  # (batch), (batch)
 
-    def _hac_train_one_batch(self, model, data, epoch=0):
-        """
-            Only for one forward pass.
-            Note: data should include depot_xy, node_xy, normalized node_demand.
-        """
-        model.train()
-        batch_size = data[0].size(0)
-        self.env.load_problems(batch_size, problems=data, aug_factor=1)
-        reset_state, _, _ = self.env.reset()
-        model.pre_forward(reset_state)
-
-        prob_list = torch.zeros(size=(batch_size, self.env.pomo_size, 0))
-        # shape: (batch, pomo, 0~problem)
-
-        # POMO Rollout
-        ###############################################
-        state, reward, done = self.env.pre_step()
-        while not done:
-            selected, prob = model(state)
-            # shape: (batch, pomo)
-            state, reward, done = self.env.step(selected)
-            prob_list = torch.cat((prob_list, prob[:, :, None]), dim=2)
-
-        # Loss
-        ###############################################
-        advantage = reward - reward.float().mean(dim=1, keepdims=True)
-        # shape: (batch, pomo)
-        log_prob = prob_list.log().sum(dim=2)
-        # size = (batch, pomo)
-        loss = -advantage * log_prob  # Minus Sign: To Increase REWARD
-        # shape: (batch, pomo)
-
-        # Score
-        ###############################################
-        max_pomo_reward, idx = reward.max(dim=1)  # get best results from pomo
-        # score_mean = -max_pomo_reward.float().mean()  # negative sign to make positive value
-
-        # Reweighting by HAC
-        loss = loss.mean(1)
-        w = ((max_pomo_reward / reward.float().mean(dim=1)) * log_prob[torch.arange(batch_size), idx]).detach()
-        t = torch.FloatTensor([20 - (epoch % 20)]).to(self.device)
-        w = torch.tanh(w) / t
-        w = torch.softmax(w, dim=0)
-        loss = (w * loss).sum()
-
-        return -max_pomo_reward.float().detach().mean().item(), loss  # (batch), (batch)
-
-    def _fast_val(self, model, data=None, path=None, offset=0, val_episodes=1000, aug_factor=1, eval_type="argmax"):
-        """
-            Note: data should include depot_xy, node_xy, normalized node_demand.
-        """
-        if data is None:
-            data = load_dataset(path, disable_print=True)[offset: offset + val_episodes]
-            depot_xy, node_xy, node_demand, capacity = [i[0] for i in data], [i[1] for i in data], [i[2] for i in data], [i[3] for i in data]
-            depot_xy, node_xy, node_demand, capacity = torch.Tensor(depot_xy), torch.Tensor(node_xy), torch.Tensor(node_demand), torch.Tensor(capacity)
-            node_demand = node_demand / capacity.view(-1, 1)
-            data = (depot_xy, node_xy, node_demand)
-
-        env = Env(**{'problem_size': data[1].size(1), 'pomo_size': data[1].size(1), 'device': self.device})
-        batch_size = data[0].size(0)
+    def _fast_val(self, model, data=None, path=None, offset=0, val_episodes=1000, aug_factor=1, eval_type="softmax"):
+        data = torch.Tensor(load_dataset(path, disable_print=True)[offset: offset + val_episodes]) if data is None else data
+        data = data.to(self.device)
+        env = Env(**{'node_cnt': data.size(1), 'problem_gen_params': {'int_min': 0, 'int_max': 1000 * 1000, 'scaler': 1000 * 1000}, 'pomo_size': data.size(1), 'device': self.device})
+        batch_size = aug_factor * data.size(0)
+        data = data.repeat(aug_factor, 1, 1)
 
         model.eval()
         model.set_eval_type(eval_type)
         with torch.no_grad():
-            env.load_problems(batch_size, problems=data, aug_factor=aug_factor)
+            env.load_problems_manual(data)
             reset_state, _, _ = env.reset()
             model.pre_forward(reset_state)
             state, reward, done = env.pre_step()
@@ -331,6 +277,7 @@ class CVRPTrainer:
                 state, reward, done = env.step(selected)
 
         # Return
+        batch_size = batch_size // aug_factor
         aug_reward = reward.reshape(aug_factor, batch_size, env.pomo_size)
         # shape: (augmentation, batch, pomo)
         max_pomo_reward, _ = aug_reward.max(dim=2)  # get best results from pomo
@@ -340,47 +287,24 @@ class CVRPTrainer:
 
         return no_aug_score, aug_score
 
-    def _generate_cur_adv(self, nat_data):
-        """
-            Note: nat_data should include depot_xy, node_xy, unnormalized node_demand and capacity,
-            since we need to save data to the file system.
-        """
-        # generate adv examples based on current models
-        depot_xy, node_xy, ori_node_demand, capacity = nat_data
-        node_demand = ori_node_demand / capacity.view(-1, 1)
-        data = (depot_xy, node_xy, node_demand)
-        adv_node_xy = torch.zeros(0, data[1].size(1), 2)
-        for i in range(self.num_expert):
-            _, node, _ = generate_adv_dataset(self.models[i], data, eps_min=self.adv_params['eps_min'], eps_max=self.adv_params['eps_max'], num_steps=self.adv_params['num_steps'])
-            adv_node_xy = torch.cat((adv_node_xy, node), dim=0)
-        adv_data = (torch.cat([depot_xy] * self.num_expert, dim=0), adv_node_xy, torch.cat([ori_node_demand] * self.num_expert, dim=0), torch.cat([capacity] * self.num_expert, dim=0))
-        with open("./adv_tmp.pkl", "wb") as f:
-            pickle.dump(list(zip(adv_data[0].tolist(), adv_data[1].tolist(), adv_data[2].tolist(), adv_data[3].tolist())), f, pickle.HIGHEST_PROTOCOL)  # [(depot_xy, node_xy, node_demand, capacity), ...]
-
-        # obtain (sub-)opt solution using HGS
-        params = argparse.ArgumentParser()
-        params.cpus, params.n, params.progress_bar_mininterval = None, None, 0.1
-        dataset = [attr.cpu().tolist() for attr in adv_data]
-        dataset = [(dataset[0][i][0], dataset[1][i], [int(d) for d in dataset[2][i]], int(dataset[3][i])) for i in range(adv_data[0].size(0))]
-        executable = get_hgs_executable()
-        def run_func(args):
-            return solve_hgs_log(executable, *args, runs=1, disable_cache=True)  # otherwise it directly loads data from dir
-        results, _ = run_all_in_pool(run_func, "./HGS_result", dataset, params, use_multiprocessing=False)
-        os.system("rm -rf ./HGS_result")
-        results = [(i[0], i[1]) for i in results]
-        save_dataset(results, "./hgs_adv_tmp.pkl")
-
-    def _val_and_stat(self, dir, val_path, batch_size=500, val_episodes=1000):
+    def _val_and_stat(self, dir, batch_size=500, val_episodes=1000):
         no_aug_score_list, aug_score_list, no_aug_gap_list, aug_gap_list = [], [], [], []
         no_aug_scores, aug_scores = torch.zeros(val_episodes, 0), torch.zeros(val_episodes, 0)
-        opt_sol = load_dataset(os.path.join(dir, "hgs_{}".format(val_path)), disable_print=True)[: val_episodes]
+
+        val_data = torch.zeros(0, self.env_params['node_cnt'], self.env_params['node_cnt'])
+        opt_sol = load_dataset("{}.pkl".format(dir), disable_print=True)[: val_episodes]
         opt_sol = [i[0] for i in opt_sol]
+        for fp in sorted(glob.iglob(os.path.join(dir, "*.atsp"))):
+            data = load_single_problem_from_file(fp, node_cnt=self.env_params['node_cnt'], scaler=1000 * 1000)
+            val_data = torch.cat((val_data, data.unsqueeze(0)), dim=0)
+        val_data = val_data[: val_episodes].to(self.device)
+
         for i in range(self.num_expert):
             episode, no_aug_score, aug_score = 0, torch.zeros(0).to(self.device), torch.zeros(0).to(self.device)
             while episode < val_episodes:
                 remaining = val_episodes - episode
                 bs = min(batch_size, remaining)
-                no_aug, aug = self._fast_val(self.models[i], path=os.path.join(dir, val_path), offset=episode, val_episodes=bs, aug_factor=8, eval_type="argmax")
+                no_aug, aug = self._fast_val(self.models[i], data=val_data[episode: episode+bs], aug_factor=16, eval_type="softmax")
                 no_aug_score = torch.cat((no_aug_score, no_aug), dim=0)
                 aug_score = torch.cat((aug_score, aug), dim=0)
                 episode += bs
@@ -400,8 +324,8 @@ class CVRPTrainer:
         moe_no_aug_score, moe_aug_score = moe_no_aug_score.mean().item(), moe_aug_score.mean().item()
 
         print(">> Val Score on {}: NO_AUG_Score: {} -> Min {} Col {}, AUG_Score: {} -> Min {} -> Col {}".format(
-            val_path, no_aug_score_list, min(no_aug_score_list), moe_no_aug_score, aug_score_list, min(aug_score_list), moe_aug_score))
+            dir, no_aug_score_list, min(no_aug_score_list), moe_no_aug_score, aug_score_list, min(aug_score_list), moe_aug_score))
         print(">> Val Score on {}: NO_AUG_Gap: {} -> Min {}% -> Col {}%, AUG_Gap: {} -> Min {}% -> Col {}%".format(
-            val_path, no_aug_gap_list, min(no_aug_gap_list), moe_no_aug_gap, aug_gap_list, min(aug_gap_list), moe_aug_gap))
+            dir, no_aug_gap_list, min(no_aug_gap_list), moe_no_aug_gap, aug_gap_list, min(aug_gap_list), moe_aug_gap))
 
         return moe_aug_score, moe_aug_gap

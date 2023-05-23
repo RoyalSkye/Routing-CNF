@@ -59,7 +59,7 @@ class CVRPTester:
             self.path_list = [os.path.join(tester_params['test_set_path'], f) for f in sorted(os.listdir(tester_params['test_set_path']))] \
                 if os.path.isdir(tester_params['test_set_path']) else [tester_params['test_set_path']]
             self.opt_sol = None
-            assert self.path_list[-1].endswith(".tsp")
+            assert self.path_list[-1].endswith(".vrp")
 
         # Load checkpoint
         model_load = tester_params['model_load']
@@ -83,7 +83,7 @@ class CVRPTester:
 
         if self.path_list:
             for path in self.path_list:
-                score, aug_score = self._solve_tsplib(self.models[i], path)
+                score, aug_score = self._solve_cvrplib(self.models[i], path)
                 scores = torch.cat((scores, score), dim=0)
                 aug_scores = torch.cat((aug_scores, aug_score), dim=0)
         else:

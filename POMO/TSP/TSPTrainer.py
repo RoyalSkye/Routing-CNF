@@ -84,7 +84,6 @@ class TSPTrainer:
             checkpoint_fullname = '{path}/checkpoint-{epoch}.pt'.format(**pretrain_load)
             checkpoint = torch.load(checkpoint_fullname, map_location=device)
             # self.pre_model.load_state_dict(checkpoint['model_state_dict'])
-            # TODO: Only load Encoder?
             for i in range(self.num_expert):
                 self.models[i].load_state_dict(checkpoint['model_state_dict'])
             self.logger.info('Pretrain model loaded successfully from {}'.format(checkpoint_fullname))
@@ -192,22 +191,15 @@ class TSPTrainer:
                 avg_loss.backward()
                 self.pre_optimizer.step()
             elif mode == "adv":
+                # Note: Could further add scheduler to control attack budget (e.g., curriculum way).
                 eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max']+1), 1)[0]
                 # eps = 1 + int(1 / 2 * (1 - math.cos(math.pi * min(epoch / 30, 1))) * (100 - 1))  # cosine
+                all_data = nat_data
 
                 # 1. generate adversarial examples by each expert (local)
                 for i in range(self.num_expert):
                     adv_data = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'], return_opt=False)
-                    data = torch.cat((nat_data, adv_data), dim=0)  # nat+adv
-                    scores = torch.zeros(batch_size * 2, 0)
-                    for j in range(self.num_expert):
-                        _, score = self._fast_val(self.models[j], data=data, aug_factor=1, eval_type="softmax")
-                        scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
-                    # print(scores)  # the scores will not be the same even at the beginning, since the policy is stochastic
-                    if self.routing_model:
-                        self._update_model_routing(data, scores, type="exp_choice")
-                    else:
-                        self._update_model_heuristic(data, scores, type="ins_exp_choice")
+                    all_data = torch.cat((all_data, adv_data), dim=0)
 
                 # 2. collaborate to generate adversarial examples (global)
                 data = nat_data
@@ -223,15 +215,17 @@ class TSPTrainer:
                         data_ = generate_x_adv(self.models[k], data[mask], eps=eps, num_steps=1, return_opt=False)
                         adv_data = torch.cat((adv_data, data_), dim=0)
                     data = adv_data
-                data = torch.cat((nat_data, data), dim=0)  # nat+adv
-                scores = torch.zeros(batch_size * 2, 0)
+                all_data = torch.cat((all_data, data), dim=0)
+
+                # routing and update models
+                scores = torch.zeros(all_data.size(0), 0)
                 for k in range(self.num_expert):
-                    _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
+                    _, score = self._fast_val(self.models[k], data=all_data, aug_factor=1, eval_type="softmax")
                     scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
                 if self.routing_model:
-                    self._update_model_routing(data, scores, type="exp_choice")
+                    self._update_model_routing(all_data, scores, type="exp_choice_with_best")
                 else:
-                    self._update_model_heuristic(data, scores, type="ins_exp_choice")
+                    self._update_model_heuristic(all_data, scores, type="ins_exp_choice")
 
             else:
                 raise NotImplementedError
@@ -290,15 +284,17 @@ class TSPTrainer:
                 d. jointly train a routing network (see self._update_model_routing)
         """
         batch_size = scores.size(0)
+        training_batch_size = min(self.trainer_params['train_batch_size'], batch_size)
+
         if type == "ins_choice":
             _, id = scores.min(1)  # (batch) - instance choice
         elif type == "exp_choice":
             gaps = (scores - scores.min(1)[0].view(-1, 1)) / scores.min(1)[0].view(-1, 1)  # relative gaps among all experts
-            _, id = gaps.topk(batch_size // 2, dim=0, largest=False)  # (k, num_expert) - expert choice
+            _, id = gaps.topk(training_batch_size, dim=0, largest=False)  # (k, num_expert) - expert choice
         elif type == "ins_exp_choice":
             gaps = (scores - scores.min(1)[0].view(-1, 1)) / scores.min(1)[0].view(-1, 1)
             _, id1 = gaps.min(1)
-            _, id2 = gaps.topk(batch_size // 2, dim=0, largest=False)
+            _, id2 = gaps.topk(training_batch_size, dim=0, largest=False)
 
         for j in range(self.num_expert):
             if type == "ins_choice":
@@ -315,6 +311,7 @@ class TSPTrainer:
                 raise NotImplementedError
             selected_data = data[mask]
             if selected_data.size(0) < 1: continue
+            # batch_data = selected_data[:selected_data.size(0) // 2] if k == 0 else selected_data[selected_data.size(0) // 2:]
             _, loss = self._train_one_batch(self.models[j], selected_data)
             avg_loss = loss.mean()
             self.optimizers[j].zero_grad()
@@ -325,14 +322,15 @@ class TSPTrainer:
         """
             Updating model using both nat_data and adv_data, which are routed by a routing network.
                 - jointly train a routing network (see MOE - Mixture-Of-Experts)
+            Note: Could further use the parameter of temperature to control the output prob distribution.
         """
-        # TODO: optimizer (Adam/SGD)? sample/topk? temp
         state = scores
         # state = scores / scores.max(1)[0].unsqueeze(1)
         # state = (scores - scores.min(1)[0].view(-1, 1)) / scores.min(1)[0].view(-1, 1)
         self.routing_model.train()
         logits = self.routing_model(data, state) / temp  # (batch_size, num_expert)
         batch_size, routing_loss, avg_scores = scores.size(0), torch.zeros(0), torch.mean(scores, dim=1)
+        training_batch_size = min(self.trainer_params['train_batch_size'], batch_size)
 
         if type == "ins_choice":
             probs = torch.softmax(logits, dim=1)
@@ -340,20 +338,20 @@ class TSPTrainer:
             id = torch.topk(probs, 1, dim=1, largest=True, sorted=False)[1].squeeze(1)
         elif type == "exp_choice":
             probs = torch.softmax(logits, dim=0)
-            # id = torch.multinomial(probs.T, num_samples=batch_size // 2, replacement=False).T  # (batch_size//2, num_expert)
-            id = torch.topk(probs, batch_size // 2, dim=0, largest=True, sorted=False)[1]
+            # id = torch.multinomial(probs.T, num_samples=training_batch_size, replacement=False).T  # (training_batch_size, num_expert)
+            id = torch.topk(probs, training_batch_size, dim=0, largest=True, sorted=False)[1]
         elif type == "ins_exp_choice":
             alpha = 0.5
             probs1, probs2 = torch.softmax(logits, dim=1), torch.softmax(logits, dim=0)
             # id1 = torch.multinomial(probs1, num_samples=1, replacement=False).squeeze(1)
-            # id2 = torch.multinomial(probs2.T, num_samples=batch_size // 2, replacement=False).T
+            # id2 = torch.multinomial(probs2.T, num_samples=training_batch_size, replacement=False).T
             id1 = torch.topk(probs1, 1, dim=1, largest=True, sorted=False)[1].squeeze(1)
-            id2 = torch.topk(probs2, batch_size // 2, dim=0, largest=True, sorted=False)[1]
+            id2 = torch.topk(probs2, training_batch_size, dim=0, largest=True, sorted=False)[1]
         elif type == "exp_choice_with_best":
             # selected = torch.zeros(batch_size, 0).to(self.device)
             probs = torch.softmax(logits, dim=0)
             _, id1 = scores.min(1)
-            id2 = torch.topk(probs, batch_size // 2, dim=0, largest=True, sorted=False)[1]
+            id2 = torch.topk(probs, training_batch_size, dim=0, largest=True, sorted=False)[1]
 
         # routing and training
         for j in range(self.num_expert):
@@ -370,6 +368,7 @@ class TSPTrainer:
                 raise NotImplementedError
             selected_data = data[mask]
             if selected_data.size(0) < 1: continue
+            # batch_data = selected_data[:selected_data.size(0)//2] if k == 0 else selected_data[selected_data.size(0)//2:]
             score, loss = self._train_one_batch(self.models[j], selected_data)
             avg_loss = loss.mean()
             self.optimizers[j].zero_grad()

@@ -79,7 +79,7 @@ if __name__ == "__main__":
         data = generate_adv_dataset(models[i], test_data, eps_min=opts.eps_min, eps_max=opts.eps_max, num_steps=opts.num_steps)
         adv_data = torch.cat((adv_data, data), dim=0)
     dir, filename = os.path.split(opts.test_set_path)
-    save_dataset(adv_data, "{}/adv_{}".format(dir, filename))
+    save_dataset(adv_data.tolist(), "{}/adv_{}".format(dir, filename))
     print(">> Adversarial dataset generation finished within {:.2f}s".format(time.time() - start_time))
 
     # obtain (sub-)opt solution using Concorde

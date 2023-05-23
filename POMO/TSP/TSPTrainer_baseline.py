@@ -180,7 +180,7 @@ class TSPTrainer:
                 self.pre_optimizer.step()
             elif mode == "adv":
                 # generate adv_data
-                # TODO: where to put? Any scheduler?
+                # Note: Could further add scheduler to control attack budget (e.g., curriculum way).
                 eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max']+1), 1)[0]
                 for i in range(self.num_expert):
                     adv_data = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'], return_opt=False)

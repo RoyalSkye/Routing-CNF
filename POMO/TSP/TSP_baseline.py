@@ -61,7 +61,7 @@ def solve_gurobi(directory, name, loc, disable_cache=False, timeout=None, gap=No
 
 
 def solve_concorde_log(executable, directory, name, loc, disable_cache=False):
-
+    loc = loc.cpu() if isinstance(loc, torch.Tensor) else loc
     problem_filename = os.path.join(directory, "{}.tsp".format(name))
     tour_filename = os.path.join(directory, "{}.tour".format(name))
     output_filename = os.path.join(directory, "{}.concorde.pkl".format(name))
@@ -123,7 +123,7 @@ def get_lkh_executable(url="http://www.akira.ruc.dk/~keld/research/LKH-3/LKH-3.0
 
 
 def solve_lkh_log(executable, directory, name, loc, runs=1, disable_cache=False, MAX_TRIALS=10000):
-
+    loc = loc.cpu() if isinstance(loc, torch.Tensor) else loc
     problem_filename = os.path.join(directory, "{}.lkh{}.vrp".format(name, runs))
     tour_filename = os.path.join(directory, "{}.lkh{}.tour".format(name, runs))
     output_filename = os.path.join(directory, "{}.lkh{}.pkl".format(name, runs))
@@ -378,7 +378,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", default=None, help="Name of the results file to write")
     parser.add_argument("--cpus", type=int, help="Number of CPUs to use, defaults to all cores")
     parser.add_argument('--no_cuda', action='store_true', help='Disable CUDA (only for Tsiligirides)')
-    parser.add_argument('--disable_cache', action='store_true', help='Disable caching')
+    parser.add_argument('--disable_cache', action='store_false', help='Disable caching')
     parser.add_argument('--max_calc_batch_size', type=int, default=1000, help='Size for subbatches')
     parser.add_argument('--progress_bar_mininterval', type=float, default=0.1, help='Minimum interval')
     parser.add_argument('-n', type=int, default=1000, help="Number of instances to process")

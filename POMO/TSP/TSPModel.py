@@ -359,7 +359,7 @@ class TSP_Routing(nn.Module):
         state = self.W2(state)  # (batch_size, embedding_dim)
         q = self.Wq(torch.cat((h, state), dim=1))  # (batch_size, embedding_dim)
         k = self.Wk(self.expert(torch.arange(self.num_expert)))  # (num_expert, embedding_dim)
-        score = torch.matmul(q, k.transpose(0, 1)) / self.embedding_dim
+        score = torch.matmul(q, k.transpose(0, 1)) / torch.sqrt(torch.tensor(self.embedding_dim, dtype=torch.float))
         logits = self.logit_clipping * torch.tanh(score)  # (batch_size, num_expert)
 
         return logits

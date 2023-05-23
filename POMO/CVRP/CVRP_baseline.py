@@ -239,7 +239,7 @@ def write_vrplib(filename, depot, loc, demand, capacity, grid_size, name="proble
         f.write("\n")
         f.write("DEMAND_SECTION\n")
         f.write("\n".join([
-            "{}\t{}".format(i + 1, d)
+            "{}\t{}".format(i + 1, int(d))  # convert to int for lkh3, otherwise "DEMAND_SECTION: Node number out of range: 0"
             for i, d in enumerate([0] + demand)
         ]))
         f.write("\n")
@@ -257,7 +257,7 @@ if __name__ == "__main__":
     parser.add_argument("-f", action='store_false', help="Set true to overwrite")
     parser.add_argument("-o", default=None, help="Name of the results file to write")
     parser.add_argument("--cpus", type=int, help="Number of CPUs to use, defaults to all cores")
-    parser.add_argument('--disable_cache', action='store_true', help='Disable caching')
+    parser.add_argument('--disable_cache', action='store_false', help='Disable caching')
     parser.add_argument('--progress_bar_mininterval', type=float, default=0.1, help='Minimum interval')
     parser.add_argument('-n', type=int, default=1000, help="Number of instances to process")
     parser.add_argument('--offset', type=int, default=0, help="Offset where to start processing")
