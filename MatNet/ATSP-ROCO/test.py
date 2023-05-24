@@ -58,6 +58,7 @@ tester_params = {
     'aug_factor': 16,
     'aug_batch_size': 100,
 }
+
 if tester_params['augmentation_enable']:
     tester_params['test_batch_size'] = tester_params['aug_batch_size']
 
@@ -70,9 +71,6 @@ logger_params = {
 }
 
 
-##########################################################################################
-# main
-
 def main():
 
     if DEBUG_MODE:
@@ -83,9 +81,7 @@ def main():
 
     seed_everything(tester_params["seed"])
 
-    tester = Tester(env_params=env_params,
-                    model_params=model_params,
-                    tester_params=tester_params)
+    tester = Tester(env_params=env_params, model_params=model_params, tester_params=tester_params)
 
     copy_all_src(tester.result_folder)
 
@@ -102,8 +98,6 @@ def _print_config():
     logger.info('DEBUG_MODE: {}'.format(DEBUG_MODE))
     [logger.info(g_key + "{}".format(globals()[g_key])) for g_key in globals().keys() if g_key.endswith('params')]
 
-
-##########################################################################################
 
 if __name__ == "__main__":
     main()

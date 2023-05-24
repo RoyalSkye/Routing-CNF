@@ -176,6 +176,8 @@ class ATSPTrainer:
                     'model_state_dict': [model.state_dict() for model in self.models],
                     'optimizer_state_dict': [optimizer.state_dict() for optimizer in self.optimizers],
                     'scheduler_state_dict': [scheduler.state_dict() for scheduler in self.schedulers],
+                    'routing_model_state_dict': self.routing_model.state_dict() if self.routing_model else None,
+                    'routing_optimizer_state_dict': self.routing_optimizer.state_dict() if self.routing_model else None,
                     'result_log': self.result_log.get_raw_data()
                 }
                 torch.save(checkpoint_dict, '{}/checkpoint-{}.pt'.format(self.result_folder, epoch))

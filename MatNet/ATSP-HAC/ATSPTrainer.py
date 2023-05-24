@@ -1,22 +1,19 @@
 import os, random
-import argparse
+import glob
 import torch
 from logging import getLogger
 
-from TSPEnv import TSPEnv as Env
-from TSPModel import TSPModel as Model
-from TSPModel import TSP_Routing
-from TSProblemDef import get_random_problems, generate_x_adv
-from TSP_baseline import solve_concorde_log
+from ATSPEnv import ATSPEnv as Env
+from ATSPModel import ATSPModel as Model
+from ATSPModel import ATSP_Routing
+from ATSProblemDef import get_random_problems, load_single_problem_from_file, generate_x_adv
 from torch.optim import Adam as Optimizer
 from torch.optim.lr_scheduler import MultiStepLR as Scheduler
-
-from generate_adv import generate_adv_dataset
 from utils.utils import *
-from utils.functions import *
+from utils.functions import load_dataset, save_dataset
 
 
-class TSPTrainer:
+class ATSPTrainer:
     def __init__(self, env_params, model_params, optimizer_params, trainer_params, adv_params):
 
         # save arguments
@@ -55,16 +52,15 @@ class TSPTrainer:
         self.models = [Model(**self.model_params) for _ in range(self.num_expert)]
         self.optimizers = [Optimizer(model.parameters(), **self.optimizer_params['optimizer']) for model in self.models]
         self.schedulers = [Scheduler(optimizer, **self.optimizer_params['scheduler']) for optimizer in self.optimizers]
-        self.routing_model = TSP_Routing(embedding_dim=model_params['embedding_dim'], num_expert=self.num_expert) if self.trainer_params['routing_model'] else None
+        self.routing_model = ATSP_Routing(embedding_dim=model_params['embedding_dim'], num_expert=self.num_expert, n=self.env_params['node_cnt']) if self.trainer_params['routing_model'] else None
         self.routing_optimizer = Optimizer(self.routing_model.parameters(), **self.optimizer_params['optimizer']) if self.routing_model else None
-        # self.routing_optimizer = torch.optim.SGD(self.routing_model.parameters(), lr=0.01) if self.routing_model else None
 
         # Restore
         self.start_epoch = 1
         model_load = trainer_params['model_load']
         pretrain_load = trainer_params['pretrain_load']
         if model_load['enable']:
-            checkpoint_fullname = '{path}/checkpoint-{epoch}.pt'.format(**model_load)
+            checkpoint_fullname = '{path}/checkpoint-{n}-{epoch}.pt'.format(**model_load)
             checkpoint = torch.load(checkpoint_fullname, map_location=device)
             model_state_dict = checkpoint['model_state_dict']
             optimizer_state_dict = checkpoint['optimizer_state_dict']
@@ -75,15 +71,11 @@ class TSPTrainer:
                 scheduler.last_epoch = model_load['epoch'] - 1
             self.start_epoch = 1 + model_load['epoch']
             self.result_log.set_raw_data(checkpoint['result_log'])
-            if self.routing_model:
-                self.routing_model.load_state_dict(checkpoint['routing_model_state_dict'])
-                self.routing_optimizer.load_state_dict(checkpoint['routing_optimizer_state_dict'])
             self.logger.info('Checkpoint loaded successfully from {}'.format(checkpoint_fullname))
 
         elif pretrain_load['enable']:  # (Only) Load pretrain model
-            checkpoint_fullname = '{path}/checkpoint-{epoch}.pt'.format(**pretrain_load)
+            checkpoint_fullname = '{path}/checkpoint-{n}-{epoch}.pt'.format(**pretrain_load)
             checkpoint = torch.load(checkpoint_fullname, map_location=device)
-            # self.pre_model.load_state_dict(checkpoint['model_state_dict'])
             for i in range(self.num_expert):
                 self.models[i].load_state_dict(checkpoint['model_state_dict'])
             self.logger.info('Pretrain model loaded successfully from {}'.format(checkpoint_fullname))
@@ -112,24 +104,16 @@ class TSPTrainer:
                 self.schedulers[i].step()
 
             # Validation
-            dir = "../../data/TSP"
-            paths = ["tsp100_uniform.pkl", "adv_tsp100_uniform.pkl"]
+            # Note: needs to regenerate adv instances using generate_x_adv
+            dirs = ["../../data/ATSP-HAC/test_n20", ]
             val_episodes, score_list, gap_list = 1000, [], []
-            # generate adv dataset based on the status of current model
-            # nat_data = torch.Tensor(load_dataset(os.path.join(dir, paths[0]), disable_print=True)[: val_episodes]).to(self.device)
-            # self._generate_cur_adv(nat_data)
-
-            for path in paths:
-                score, gap = self._val_and_stat(dir, path, batch_size=500, val_episodes=val_episodes)
+            for dir in dirs:
+                score, gap = self._val_and_stat(dir, batch_size=100, val_episodes=val_episodes)
                 score_list.append(score); gap_list.append(gap)
-            # score, gap = self._val_and_stat("./", "adv_tmp.pkl", batch_size=500, val_episodes=val_episodes * self.num_expert)
-            # score_list.append(score); gap_list.append(gap)
             self.result_log.append('val_score', epoch, score_list)
             self.result_log.append('val_gap', epoch, gap_list)
 
-            ############################
             # Logs & Checkpoint
-            ############################
             elapsed_time_str, remain_time_str = self.time_estimator.get_est_string(epoch, self.trainer_params['epochs'])
             self.logger.info("Epoch {:3d}/{:3d}: Time Est.: Elapsed[{}], Remain[{}]".format(epoch, self.trainer_params['epochs'], elapsed_time_str, remain_time_str))
 
@@ -140,8 +124,6 @@ class TSPTrainer:
             if epoch > 1:  # save latest images, every epoch
                 self.logger.info("Saving log_image")
                 image_prefix = '{}/latest'.format(self.result_folder)
-                # util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_1'], self.result_log, labels=['train_score'])
-                # util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_2'], self.result_log, labels=['train_loss'])
                 util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_1'], self.result_log, labels=['val_score'])
                 util_save_log_image_with_label(image_prefix, self.trainer_params['logging']['log_image_params_1'], self.result_log, labels=['val_gap'])
 
@@ -165,7 +147,7 @@ class TSPTrainer:
 
     def _train_one_epoch(self, epoch, mode="nat"):
         """
-            Improve the Robustness of Neural Heuristics through CNF (Experts Collaboration).
+            Improve the Robustness of Neural Heuristics through Experts Collaboration.
             Phase 1 mode == "nat":
                 Pre-training one model on natural instances.
             Phase 2 mode == "adv":
@@ -173,14 +155,13 @@ class TSPTrainer:
                     - Generating adversarial instances;
                     - Train on nat+adv ins. with routing mechanism
         """
-        # score_AM, loss_AM = AverageMeter(), AverageMeter()
         episode = 0
         train_num_episode = self.trainer_params['train_episodes']
 
         while episode < train_num_episode:
             remaining = train_num_episode - episode
             batch_size = min(self.trainer_params['train_batch_size'], remaining)
-            nat_data = get_random_problems(batch_size, self.env_params['problem_size'])
+            nat_data = get_random_problems(batch_size, self.env_params["node_cnt"], self.env_params["problem_gen_params"])
 
             if mode == "nat":
                 # forward pass
@@ -192,7 +173,7 @@ class TSPTrainer:
                 self.pre_optimizer.step()
             elif mode == "adv":
                 # Note: Could further add scheduler to control attack budget (e.g., curriculum way).
-                eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max']+1), 1)[0]
+                eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max'] + 1), 1)[0]
                 # eps = 1 + int(1 / 2 * (1 - math.cos(math.pi * min(epoch / 30, 1))) * (100 - 1))  # cosine
                 all_data = nat_data
 
@@ -204,7 +185,7 @@ class TSPTrainer:
                 # 2. collaborate to generate adversarial examples (global)
                 data = nat_data
                 for _ in range(self.adv_params['num_steps']):
-                    adv_data, scores = torch.zeros(0, data.size(1), 2), torch.zeros(batch_size, 0)
+                    adv_data, scores = torch.zeros(0, data.size(1), data.size(1)), torch.zeros(batch_size, 0)
                     for k in range(self.num_expert):
                         _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
                         scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
@@ -226,7 +207,6 @@ class TSPTrainer:
                     self._update_model_routing(all_data, scores, type="exp_choice_with_best")
                 else:
                     self._update_model_heuristic(all_data, scores, type="ins_exp_choice")
-
             else:
                 raise NotImplementedError
 
@@ -241,15 +221,13 @@ class TSPTrainer:
         """
         model.train()
         batch_size = data.size(0)
-        self.env.load_problems(batch_size, problems=data, aug_factor=1)
+        self.env.load_problems_manual(data)
         reset_state, _, _ = self.env.reset()
         model.pre_forward(reset_state)
-
         prob_list = torch.zeros(size=(batch_size, self.env.pomo_size, 0))
-        # shape: (batch, pomo, 0~problem)
+        # shape: (batch, pomo, 0~)
 
         # POMO Rollout
-        ###############################################
         state, reward, done = self.env.pre_step()
         while not done:
             selected, prob = model(state)
@@ -257,8 +235,7 @@ class TSPTrainer:
             state, reward, done = self.env.step(selected)
             prob_list = torch.cat((prob_list, prob[:, :, None]), dim=2)
 
-        # Loss
-        ###############################################
+        # Loss & Score
         advantage = reward - reward.float().mean(dim=1, keepdims=True)
         # shape: (batch, pomo)
         log_prob = prob_list.log().sum(dim=2)
@@ -266,9 +243,6 @@ class TSPTrainer:
         loss = -advantage * log_prob  # Minus Sign: To Increase REWARD
         # shape: (batch, pomo)
         # loss_mean = loss.mean()
-
-        # Score
-        ###############################################
         max_pomo_reward, _ = reward.max(dim=1)  # get best results from pomo
         # score_mean = -max_pomo_reward.float().mean()  # negative sign to make positive value
 
@@ -278,9 +252,9 @@ class TSPTrainer:
         """
             Updating model using both nat_data and adv_data.
             Routing Mechanism:
-                a. ins_choice: Each instance chooses its best expert (cons: no load_balance)
-                b. exp_choice: Each expert chooses TopK instances based on relative gaps (cons: some instances may not be trained)
-                c. ins_exp_choice: Combine together
+                a. Each instance chooses its best expert (cons: no load_balance)
+                b. Each expert chooses TopK instances based on relative gaps (cons: some instances may not be trained)
+                c. Combine together
                 d. jointly train a routing network (see self._update_model_routing)
         """
         batch_size = scores.size(0)
@@ -322,7 +296,6 @@ class TSPTrainer:
         """
             Updating model using both nat_data and adv_data, which are routed by a routing network.
                 - jointly train a routing network (see MOE - Mixture-Of-Experts)
-            Note: Could further use the parameter of temperature to control the output prob distribution.
         """
         state = scores
         # state = scores / scores.max(1)[0].unsqueeze(1)
@@ -409,16 +382,17 @@ class TSPTrainer:
         routing_loss.backward()
         self.routing_optimizer.step()
 
-    def _fast_val(self, model, data=None, path=None, offset=0, val_episodes=1000, aug_factor=1, eval_type="argmax"):
+    def _fast_val(self, model, data=None, path=None, offset=0, val_episodes=1000, aug_factor=1, eval_type="softmax"):
         data = torch.Tensor(load_dataset(path, disable_print=True)[offset: offset + val_episodes]) if data is None else data
         data = data.to(self.device)
-        env = Env(**{'problem_size': data.size(1), 'pomo_size': data.size(1), 'device': self.device})
-        batch_size = data.size(0)
+        env = Env(**{'node_cnt': data.size(1), 'problem_gen_params': {'int_min': 0, 'int_max': 1000 * 1000, 'scaler': 1000 * 1000}, 'pomo_size': data.size(1), 'device': self.device})
+        batch_size = aug_factor * data.size(0)
+        data = data.repeat(aug_factor, 1, 1)
 
         model.eval()
         model.set_eval_type(eval_type)
         with torch.no_grad():
-            env.load_problems(batch_size, problems=data, aug_factor=aug_factor)
+            env.load_problems_manual(data)
             reset_state, _, _ = env.reset()
             model.pre_forward(reset_state)
             state, reward, done = env.pre_step()
@@ -428,6 +402,7 @@ class TSPTrainer:
                 state, reward, done = env.step(selected)
 
         # Return
+        batch_size = batch_size // aug_factor
         aug_reward = reward.reshape(aug_factor, batch_size, env.pomo_size)
         # shape: (augmentation, batch, pomo)
         max_pomo_reward, _ = aug_reward.max(dim=2)  # get best results from pomo
@@ -437,37 +412,24 @@ class TSPTrainer:
 
         return no_aug_score, aug_score
 
-    def _generate_cur_adv(self, nat_data):
-        # generate adv examples based on current models
-        adv_data = torch.zeros(0, self.env_params['problem_size'], 2).to(self.device)
-        for j in range(self.num_expert):
-            data = generate_adv_dataset(self.models[j], nat_data, eps_min=self.adv_params['eps_min'], eps_max=self.adv_params['eps_max'], num_steps=self.adv_params['num_steps'])
-            adv_data = torch.cat((adv_data, data), dim=0)
-        save_dataset(adv_data, "./adv_tmp.pkl")
-
-        # obtain (sub-)opt solution using Concorde
-        params = argparse.ArgumentParser()
-        params.cpus, params.n, params.progress_bar_mininterval = None, None, 0.1
-        dataset = [(instance.cpu().numpy(),) for instance in adv_data]
-        executable = os.path.abspath(os.path.join('concorde', 'concorde', 'TSP', 'concorde'))
-        def run_func(args):
-            return solve_concorde_log(executable, *args, disable_cache=True)
-        results, _ = run_all_in_pool(run_func, "./Concorde_result", dataset, params, use_multiprocessing=False)
-        os.system("rm -rf ./Concorde_result")
-        results = [(i[0], i[1]) for i in results]
-        save_dataset(results, "./concorde_adv_tmp.pkl")
-
-    def _val_and_stat(self, dir, val_path, batch_size=500, val_episodes=1000):
+    def _val_and_stat(self, dir, batch_size=500, val_episodes=1000):
         no_aug_score_list, aug_score_list, no_aug_gap_list, aug_gap_list = [], [], [], []
         no_aug_scores, aug_scores = torch.zeros(val_episodes, 0), torch.zeros(val_episodes, 0)
-        opt_sol = load_dataset(os.path.join(dir, "concorde_{}".format(val_path)), disable_print=True)[: val_episodes]
+
+        val_data = torch.zeros(0, self.env_params['node_cnt'], self.env_params['node_cnt'])
+        opt_sol = load_dataset("{}.pkl".format(dir), disable_print=True)[: val_episodes]
         opt_sol = [i[0] for i in opt_sol]
+        for fp in sorted(glob.iglob(os.path.join(dir, "*.atsp"))):
+            data = load_single_problem_from_file(fp, node_cnt=self.env_params['node_cnt'], scaler=1000 * 1000)
+            val_data = torch.cat((val_data, data.unsqueeze(0)), dim=0)
+        val_data = val_data[: val_episodes].to(self.device)
+
         for i in range(self.num_expert):
             episode, no_aug_score, aug_score = 0, torch.zeros(0).to(self.device), torch.zeros(0).to(self.device)
             while episode < val_episodes:
                 remaining = val_episodes - episode
                 bs = min(batch_size, remaining)
-                no_aug, aug = self._fast_val(self.models[i], path=os.path.join(dir, val_path), offset=episode, val_episodes=bs, aug_factor=8, eval_type="argmax")
+                no_aug, aug = self._fast_val(self.models[i], data=val_data[episode: episode+bs], aug_factor=16, eval_type="softmax")
                 no_aug_score = torch.cat((no_aug_score, no_aug), dim=0)
                 aug_score = torch.cat((aug_score, aug), dim=0)
                 episode += bs
@@ -487,8 +449,8 @@ class TSPTrainer:
         moe_no_aug_score, moe_aug_score = moe_no_aug_score.mean().item(), moe_aug_score.mean().item()
 
         print(">> Val Score on {}: NO_AUG_Score: {} -> Min {} Col {}, AUG_Score: {} -> Min {} -> Col {}".format(
-            val_path, no_aug_score_list, min(no_aug_score_list), moe_no_aug_score, aug_score_list, min(aug_score_list), moe_aug_score))
+            dir, no_aug_score_list, min(no_aug_score_list), moe_no_aug_score, aug_score_list, min(aug_score_list), moe_aug_score))
         print(">> Val Score on {}: NO_AUG_Gap: {} -> Min {}% -> Col {}%, AUG_Gap: {} -> Min {}% -> Col {}%".format(
-            val_path, no_aug_gap_list, min(no_aug_gap_list), moe_no_aug_gap, aug_gap_list, min(aug_gap_list), moe_aug_gap))
+            dir, no_aug_gap_list, min(no_aug_gap_list), moe_no_aug_gap, aug_gap_list, min(aug_gap_list), moe_aug_gap))
 
         return moe_aug_score, moe_aug_gap

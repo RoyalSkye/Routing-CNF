@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ATSPModel_LIB import AddAndInstanceNormalization, FeedForward, MixedScore_MultiHeadAttention
+from ATSPModel_LIB import Add_And_Normalization_Module, FeedForward, MixedScore_MultiHeadAttention
 
 
 class ATSPModel(nn.Module):
@@ -9,12 +9,14 @@ class ATSPModel(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         self.model_params = model_params
+        self.eval_type = self.model_params['eval_type']
 
         self.encoder = ATSP_Encoder(**model_params)
         self.decoder = ATSP_Decoder(**model_params)
 
         self.encoded_row = None
         self.encoded_col = None
+        self.device = torch.device('cuda', torch.cuda.current_device()) if 'device' not in model_params.keys() else model_params['device']
         # shape: (batch, node, embedding)
 
     def pre_forward(self, reset_state):
@@ -26,9 +28,9 @@ class ATSPModel(nn.Module):
         node_cnt = problems.size(1)
         embedding_dim = self.model_params['embedding_dim']
 
-        row_emb = torch.zeros(size=(batch_size, node_cnt, embedding_dim))
+        row_emb = torch.zeros(size=(batch_size, node_cnt, embedding_dim)).to(self.device)
         # emb.shape: (batch, node, embedding)
-        col_emb = torch.zeros(size=(batch_size, node_cnt, embedding_dim))
+        col_emb = torch.zeros(size=(batch_size, node_cnt, embedding_dim)).to(self.device)
         # shape: (batch, node, embedding)
 
         seed_cnt = self.model_params['one_hot_seed_cnt']
@@ -55,7 +57,7 @@ class ATSPModel(nn.Module):
         pomo_size = state.BATCH_IDX.size(1)
 
         if state.current_node is None:
-            selected = torch.arange(pomo_size)[None, :].expand(batch_size, pomo_size)
+            selected = torch.arange(pomo_size)[None, :].expand(batch_size, pomo_size).to(self.device)
             prob = torch.ones(size=(batch_size, pomo_size))
 
             # encoded_rows_mean = self.encoded_row.mean(dim=1, keepdim=True)
@@ -71,15 +73,13 @@ class ATSPModel(nn.Module):
             all_job_probs = self.decoder(encoded_current_row, ninf_mask=state.ninf_mask)
             # shape: (batch, pomo, job)
 
-            if self.training or self.model_params['eval_type'] == 'softmax':
+            if self.training or self.eval_type == 'softmax':
                 while True:  # to fix pytorch.multinomial bug on selecting 0 probability elements
                     with torch.no_grad():
-                        selected = all_job_probs.reshape(batch_size * pomo_size, -1).multinomial(1) \
-                            .squeeze(dim=1).reshape(batch_size, pomo_size)
+                        selected = all_job_probs.reshape(batch_size * pomo_size, -1).multinomial(1).squeeze(dim=1).reshape(batch_size, pomo_size)
                         # shape: (batch, pomo)
 
-                    prob = all_job_probs[state.BATCH_IDX, state.POMO_IDX, selected] \
-                        .reshape(batch_size, pomo_size)
+                    prob = all_job_probs[state.BATCH_IDX, state.POMO_IDX, selected].reshape(batch_size, pomo_size)
                     # shape: (batch, pomo)
 
                     if (prob != 0).all():
@@ -159,9 +159,9 @@ class EncodingBlock(nn.Module):
         self.mixed_score_MHA = MixedScore_MultiHeadAttention(**model_params)
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
 
-        self.add_n_normalization_1 = AddAndInstanceNormalization(**model_params)
+        self.add_n_normalization_1 = Add_And_Normalization_Module(**model_params)
         self.feed_forward = FeedForward(**model_params)
-        self.add_n_normalization_2 = AddAndInstanceNormalization(**model_params)
+        self.add_n_normalization_2 = Add_And_Normalization_Module(**model_params)
 
     def forward(self, row_emb, col_emb, cost_mat):
         # NOTE: row and col can be exchanged, if cost_mat.transpose(1,2) is used
