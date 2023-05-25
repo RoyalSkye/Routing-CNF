@@ -12,6 +12,6 @@ __pycache__/
 .idea/
 
 # private files
-data/
-pretrained/
+our_data/
+our_pretrained/
 tmp/
