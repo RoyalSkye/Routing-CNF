@@ -202,20 +202,21 @@ class TSPTrainer:
                     all_data = torch.cat((all_data, adv_data), dim=0)
 
                 # 2. collaborate to generate adversarial examples (global)
-                data = nat_data
-                for _ in range(self.adv_params['num_steps']):
-                    adv_data, scores = torch.zeros(0, data.size(1), 2), torch.zeros(batch_size, 0)
-                    for k in range(self.num_expert):
-                        _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
-                        scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
-                    _, id = scores.min(1)
-                    for k in range(self.num_expert):
-                        mask = (id == k)
-                        if mask.sum() < 1: continue
-                        data_ = generate_x_adv(self.models[k], data[mask], eps=eps, num_steps=1, return_opt=False)
-                        adv_data = torch.cat((adv_data, data_), dim=0)
-                    data = adv_data
-                all_data = torch.cat((all_data, data), dim=0)
+                if self.trainer_params['global_attack']:
+                    data = nat_data
+                    for _ in range(self.adv_params['num_steps']):
+                        adv_data, scores = torch.zeros(0, data.size(1), 2), torch.zeros(batch_size, 0)
+                        for k in range(self.num_expert):
+                            _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
+                            scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
+                        _, id = scores.min(1)
+                        for k in range(self.num_expert):
+                            mask = (id == k)
+                            if mask.sum() < 1: continue
+                            data_ = generate_x_adv(self.models[k], data[mask], eps=eps, num_steps=1, return_opt=False)
+                            adv_data = torch.cat((adv_data, data_), dim=0)
+                        data = adv_data
+                    all_data = torch.cat((all_data, data), dim=0)
 
                 # routing and update models
                 scores = torch.zeros(all_data.size(0), 0)
@@ -225,7 +226,7 @@ class TSPTrainer:
                 if self.routing_model:
                     self._update_model_routing(all_data, scores, type="exp_choice_with_best")
                 else:
-                    self._update_model_heuristic(all_data, scores, type="ins_exp_choice")
+                    self._update_model_heuristic(all_data, scores, type="random")
 
             else:
                 raise NotImplementedError
@@ -295,6 +296,8 @@ class TSPTrainer:
             gaps = (scores - scores.min(1)[0].view(-1, 1)) / scores.min(1)[0].view(-1, 1)
             _, id1 = gaps.min(1)
             _, id2 = gaps.topk(training_batch_size, dim=0, largest=False)
+        elif type == "random":
+            id = torch.randperm(data.size(0))
 
         for j in range(self.num_expert):
             if type == "ins_choice":
@@ -307,6 +310,10 @@ class TSPTrainer:
                 mask = mask1 | mask2
             elif type == "normal":
                 mask = torch.ones(batch_size).bool()
+            elif type == "random":
+                start = 0 + data.size(0)//3 * j
+                end = max(start + data.size(0)//3, data.size(0))
+                mask = id[start: end]
             else:
                 raise NotImplementedError
             selected_data = data[mask]

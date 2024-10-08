@@ -203,27 +203,28 @@ class CVRPTrainer:
 
                 # 1. generate adversarial examples by each expert (local)
                 for i in range(self.num_expert):
-                    depot, node, demand = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'])
+                    depot, node, demand = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'], perturb_demand=self.adv_params['perturb_demand'])
                     all_data = (torch.cat((all_data[0], depot), dim=0), torch.cat((all_data[1], node), dim=0), torch.cat((all_data[2], demand), dim=0))
 
                 # 2. collaborate to generate adversarial examples (global)
-                data = nat_data
-                for _ in range(self.adv_params['num_steps']):
-                    scores = torch.zeros(batch_size, 0)
-                    adv_depot, adv_node, adv_demand = torch.zeros(0, 1, 2), torch.zeros(0, data[1].size(1), 2), torch.zeros(0, data[2].size(1))
-                    for k in range(self.num_expert):
-                        _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
-                        scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
-                    _, id = scores.min(1)
-                    for k in range(self.num_expert):
-                        mask = (id == k)
-                        if mask.sum() < 1: continue
-                        depot, node, demand = generate_x_adv(self.models[k], (data[0][mask], data[1][mask], data[2][mask]), eps=eps, num_steps=1)
-                        adv_depot = torch.cat((adv_depot, depot), dim=0)
-                        adv_node = torch.cat((adv_node, node), dim=0)
-                        adv_demand = torch.cat((adv_demand, demand), dim=0)
-                    data = (adv_depot, adv_node, adv_demand)
-                all_data = (torch.cat((all_data[0], data[0]), dim=0), torch.cat((all_data[1], data[1]), dim=0), torch.cat((all_data[2], data[2]), dim=0))
+                if self.trainer_params['global_attack']:
+                    data = nat_data
+                    for _ in range(self.adv_params['num_steps']):
+                        scores = torch.zeros(batch_size, 0)
+                        adv_depot, adv_node, adv_demand = torch.zeros(0, 1, 2), torch.zeros(0, data[1].size(1), 2), torch.zeros(0, data[2].size(1))
+                        for k in range(self.num_expert):
+                            _, score = self._fast_val(self.models[k], data=data, aug_factor=1, eval_type="softmax")
+                            scores = torch.cat((scores, score.unsqueeze(1)), dim=1)
+                        _, id = scores.min(1)
+                        for k in range(self.num_expert):
+                            mask = (id == k)
+                            if mask.sum() < 1: continue
+                            depot, node, demand = generate_x_adv(self.models[k], (data[0][mask], data[1][mask], data[2][mask]), eps=eps, num_steps=1, perturb_demand=self.adv_params['perturb_demand'])
+                            adv_depot = torch.cat((adv_depot, depot), dim=0)
+                            adv_node = torch.cat((adv_node, node), dim=0)
+                            adv_demand = torch.cat((adv_demand, demand), dim=0)
+                        data = (adv_depot, adv_node, adv_demand)
+                    all_data = (torch.cat((all_data[0], data[0]), dim=0), torch.cat((all_data[1], data[1]), dim=0), torch.cat((all_data[2], data[2]), dim=0))
 
                 # routing and update models
                 scores = torch.zeros(all_data[0].size(0), 0)
@@ -233,7 +234,7 @@ class CVRPTrainer:
                 if self.routing_model:
                     self._update_model_routing(all_data, scores, type="exp_choice_with_best")
                 else:
-                    self._update_model_heuristic(all_data, scores, type="ins_exp_choice")
+                    self._update_model_heuristic(all_data, scores, type="random")
 
             else:
                 raise NotImplementedError
@@ -306,6 +307,8 @@ class CVRPTrainer:
             gaps = (scores - scores.min(1)[0].view(-1, 1)) / scores.min(1)[0].view(-1, 1)
             _, id1 = gaps.min(1)
             _, id2 = gaps.topk(training_batch_size, dim=0, largest=False)
+        elif type == "random":
+            id = torch.randperm(data[-1].size(0))
 
         for j in range(self.num_expert):
             if type == "ins_choice":
@@ -318,6 +321,10 @@ class CVRPTrainer:
                 mask = mask1 | mask2
             elif type == "normal":
                 mask = torch.ones(batch_size).bool()
+            elif type == "random":
+                start = 0 + data[-1].size(0) // 3 * j
+                end = max(start + data[-1].size(0) // 3, data[-1].size(0))
+                mask = id[start: end]
             else:
                 raise NotImplementedError
             selected_data = (depot_xy[mask], node_xy[mask], node_demand[mask])
@@ -467,7 +474,7 @@ class CVRPTrainer:
         data = (depot_xy, node_xy, node_demand)
         adv_node_xy = torch.zeros(0, data[1].size(1), 2)
         for i in range(self.num_expert):
-            _, node, _ = generate_adv_dataset(self.models[i], data, eps_min=self.adv_params['eps_min'], eps_max=self.adv_params['eps_max'], num_steps=self.adv_params['num_steps'])
+            _, node, _ = generate_adv_dataset(self.models[i], data, eps_min=self.adv_params['eps_min'], eps_max=self.adv_params['eps_max'], num_steps=self.adv_params['num_steps'], perturb_demand=self.adv_params['perturb_demand'])
             adv_node_xy = torch.cat((adv_node_xy, node), dim=0)
         adv_data = (torch.cat([depot_xy] * self.num_expert, dim=0), adv_node_xy, torch.cat([ori_node_demand] * self.num_expert, dim=0), torch.cat([capacity] * self.num_expert, dim=0))
         with open("./adv_tmp.pkl", "wb") as f:

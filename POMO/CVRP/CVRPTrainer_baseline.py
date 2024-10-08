@@ -189,7 +189,7 @@ class CVRPTrainer:
                 # Note: Could further add scheduler to control attack budget (e.g., curriculum way).
                 eps = random.sample(range(self.adv_params['eps_min'], self.adv_params['eps_max']+1), 1)[0]
                 for i in range(self.num_expert):
-                    adv_data = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'])
+                    adv_data = generate_x_adv(self.models[i], nat_data, eps=eps, num_steps=self.adv_params['num_steps'], perturb_demand=self.adv_params['perturb_demand'])
 
                     if self.trainer_params['method'] == "baseline":
                         score, loss = self._train_one_batch(self.models[i], adv_data)  # (batch), (batch)
@@ -351,7 +351,7 @@ class CVRPTrainer:
         data = (depot_xy, node_xy, node_demand)
         adv_node_xy = torch.zeros(0, data[1].size(1), 2)
         for i in range(self.num_expert):
-            _, node, _ = generate_adv_dataset(self.models[i], data, eps_min=self.adv_params['eps_min'], eps_max=self.adv_params['eps_max'], num_steps=self.adv_params['num_steps'])
+            _, node, _ = generate_adv_dataset(self.models[i], data, eps_min=self.adv_params['eps_min'], eps_max=self.adv_params['eps_max'], num_steps=self.adv_params['num_steps'], perturb_demand=self.adv_params['perturb_demand'])
             adv_node_xy = torch.cat((adv_node_xy, node), dim=0)
         adv_data = (torch.cat([depot_xy] * self.num_expert, dim=0), adv_node_xy, torch.cat([ori_node_demand] * self.num_expert, dim=0), torch.cat([capacity] * self.num_expert, dim=0))
         with open("./adv_tmp.pkl", "wb") as f:

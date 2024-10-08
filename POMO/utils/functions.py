@@ -13,6 +13,13 @@ from multiprocessing.dummy import Pool as ThreadPool
 from scipy.stats import ttest_rel
 
 
+def num_param(model):
+    nb_param = 0
+    for param in model.parameters():
+        nb_param += param.numel()
+    print('There are {} ({:.2f} million) parameters in this neural network'.format(nb_param, nb_param / 1e6))
+
+
 def check_null_hypothesis(a, b):
     print(len(a), a)
     print(len(b), b)

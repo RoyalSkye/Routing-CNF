@@ -48,7 +48,8 @@ trainer_params = {
     'cuda_device_num': CUDA_DEVICE_NUM,
     'seed': 1234,
     'method': 'ours',  # choose from ['ours', 'baseline', 'baseline_hac']
-    'routing_model': True,
+    'routing_model': True,  # for 'ours'
+    'global_attack': True,  # for 'ours' (Note: set adv_params['num_steps'] > 1 for abl study)
     'epochs': 500,
     'pretrain_epochs': 30500,
     'train_episodes': 10 * 1000,
@@ -84,6 +85,7 @@ adv_params = {
     'eps_min': 1,
     'eps_max': 100,
     'num_steps': 1,
+    'perturb_demand': False
 }
 
 logger_params = {

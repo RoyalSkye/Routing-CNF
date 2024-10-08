@@ -53,7 +53,7 @@ def augment_xy_data_by_8_fold(xy_data):
     return aug_xy_data
 
 
-def generate_x_adv(model, nat_data, eps=10.0, num_steps=1):
+def generate_x_adv(model, nat_data, eps=10.0, num_steps=1, perturb_demand=False):
     """
         Generate adversarial data based on the current model.
         Note: We only modify the continuous variable (i.e., coordinate) in CVRP.
@@ -80,7 +80,8 @@ def generate_x_adv(model, nat_data, eps=10.0, num_steps=1):
     with torch.enable_grad():
         for i in range(num_steps):
             # depot_xy.requires_grad_()
-            node_demand.requires_grad_()
+            if perturb_demand:
+                node_demand.requires_grad_()
             node_xy.requires_grad_()
             env.load_problems(batch_size, problems=(depot_xy, node_xy, node_demand), aug_factor=aug_factor)
             reset_state, _, _ = env.reset()
@@ -99,8 +100,9 @@ def generate_x_adv(model, nat_data, eps=10.0, num_steps=1):
             # May cause gradient nan problem.
             # delta = torch.autograd.grad(eps * ((aug_reward / baseline_reward) * log_prob).mean(), depot_xy, retain_graph=True)[0]  # original with baseline
             # depot_xy = depot_xy.detach() + delta
-            delta = torch.autograd.grad(eps * ((aug_reward / baseline_reward) * log_prob).mean(), node_demand, retain_graph=True)[0]
-            node_demand = node_demand.detach() + delta
+            if perturb_demand:
+                delta = torch.autograd.grad(eps * ((aug_reward / baseline_reward) * log_prob).mean(), node_demand, retain_graph=True)[0]
+                node_demand = node_demand.detach() + delta
             delta = torch.autograd.grad(eps * ((aug_reward / baseline_reward) * log_prob).mean(), node_xy)[0]  # original with baseline
             # delta = torch.autograd.grad(eps * (aug_reward * log_prob).mean(), node_xy)[0]  # original without baseline
             node_xy = node_xy.detach() + delta
@@ -108,9 +110,10 @@ def generate_x_adv(model, nat_data, eps=10.0, num_steps=1):
             # data = minmax(torch.cat((depot_xy, node_xy), dim=1))
             # depot_xy, node_xy = data[:, :1, :], data[:, 1:, :]
             # depot_xy = Variable(depot_xy, requires_grad=False)
-            node_demand = torch.ceil(minmax(node_demand) * 9 + 1) / demand_scaler[node_xy.size(1)]
-            # node_demand = minmax(node_demand)
-            node_demand = Variable(node_demand, requires_grad=False)
+            if perturb_demand:
+                node_demand = torch.clamp(torch.ceil(minmax(node_demand) * 9), min=1, max=9) / demand_scaler[node_xy.size(1)]
+                # node_demand = minmax(node_demand)
+                node_demand = Variable(node_demand, requires_grad=False)
             node_xy = minmax(node_xy)
             node_xy = Variable(node_xy, requires_grad=False)
 

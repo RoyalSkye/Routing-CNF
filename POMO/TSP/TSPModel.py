@@ -292,6 +292,8 @@ class Add_And_Normalization_Module(nn.Module):
             self.norm = nn.BatchNorm1d(embedding_dim, affine=True, track_running_stats=False)
         elif model_params["norm"] == "instance":
             self.norm = nn.InstanceNorm1d(embedding_dim, affine=True, track_running_stats=False)
+        elif model_params["norm"] == "layer":
+            self.norm = nn.LayerNorm(embedding_dim)
         elif model_params["norm"] == "rezero":
             self.norm = torch.nn.Parameter(torch.Tensor([0.]), requires_grad=True)
         else:
@@ -312,6 +314,9 @@ class Add_And_Normalization_Module(nn.Module):
             batch, problem, embedding = added.size()
             normalized = self.norm(added.reshape(batch * problem, embedding))
             back_trans = normalized.reshape(batch, problem, embedding)
+        elif isinstance(self.norm, nn.LayerNorm):
+            added = input1 + input2
+            back_trans = self.norm(added)
         elif isinstance(self.norm, nn.Parameter):
             back_trans = input1 + self.norm * input2
         else:

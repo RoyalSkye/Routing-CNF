@@ -147,9 +147,9 @@ class EncoderLayer(nn.Module):
         self.Wv = nn.Linear(embedding_dim, head_num * qkv_dim, bias=False)
         self.multi_head_combine = nn.Linear(head_num * qkv_dim, embedding_dim)
 
-        self.add_n_normalization_1 = AddAndInstanceNormalization(**model_params)
+        self.add_n_normalization_1 = Add_And_Normalization_Module(**model_params)
         self.feed_forward = FeedForward(**model_params)
-        self.add_n_normalization_2 = AddAndInstanceNormalization(**model_params)
+        self.add_n_normalization_2 = Add_And_Normalization_Module(**model_params)
 
     def forward(self, input1):
         # input1.shape: (batch, problem+1, embedding)
@@ -325,7 +325,7 @@ def multi_head_attention(q, k, v, rank2_ninf_mask=None, rank3_ninf_mask=None):
     return out_concat
 
 
-class AddAndInstanceNormalization(nn.Module):
+class Add_And_Normalization_Module(nn.Module):
     def __init__(self, **model_params):
         super().__init__()
         embedding_dim = model_params['embedding_dim']
@@ -335,6 +335,8 @@ class AddAndInstanceNormalization(nn.Module):
             self.norm = nn.BatchNorm1d(embedding_dim, affine=True, track_running_stats=False)
         elif model_params["norm"] == "instance":
             self.norm = nn.InstanceNorm1d(embedding_dim, affine=True, track_running_stats=False)
+        elif model_params["norm"] == "layer":
+            self.norm = nn.LayerNorm(embedding_dim)
         elif model_params["norm"] == "rezero":
             self.norm = torch.nn.Parameter(torch.Tensor([0.]), requires_grad=True)
         else:
@@ -355,31 +357,13 @@ class AddAndInstanceNormalization(nn.Module):
             batch_s, problem_s, embedding_dim = input1.size(0), input1.size(1), input1.size(2)
             normalized = self.norm(added.reshape(batch_s * problem_s, embedding_dim))
             back_trans = normalized.reshape(batch_s, problem_s, embedding_dim)
+        elif isinstance(self.norm, nn.LayerNorm):
+            added = input1 + input2
+            back_trans = self.norm(added)
         elif isinstance(self.norm, nn.Parameter):
             back_trans = input1 + self.norm * input2
         else:
             back_trans = input1 + input2
-
-        return back_trans
-
-
-class AddAndBatchNormalization(nn.Module):
-    def __init__(self, **model_params):
-        super().__init__()
-        embedding_dim = model_params['embedding_dim']
-        self.norm_by_EMB = nn.BatchNorm1d(embedding_dim, affine=True)
-        # 'Funny' Batch_Norm, as it will normalized by EMB dim
-
-    def forward(self, input1, input2):
-        # input.shape: (batch, problem, embedding)
-
-        batch_s = input1.size(0)
-        problem_s = input1.size(1)
-        embedding_dim = input1.size(2)
-
-        added = input1 + input2
-        normalized = self.norm_by_EMB(added.reshape(batch_s * problem_s, embedding_dim))
-        back_trans = normalized.reshape(batch_s, problem_s, embedding_dim)
 
         return back_trans
 

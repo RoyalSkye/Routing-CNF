@@ -43,7 +43,7 @@ def get_config():
     parser.add_argument('-loc_scaler', default=1.0, type=float, help="The scaler of coordinates to valid range [0, 1]")
     parser.add_argument('-max_iter', default=200, type=int, help="Maximum number of EAS iterations")
     parser.add_argument('-max_runtime', default=100000, type=int, help="Maximum runtime of EAS per batch in seconds")
-    parser.add_argument('-batch_size', default=150, type=int)  # Set to 1 for single instance search
+    parser.add_argument('-batch_size', default=1, type=int)  # Set to 1 for single instance search
     parser.add_argument('-p_runs', default=1, type=int)  # If batch_size is 1, set this to > 1 to do multiple runs for the instance in parallel
     parser.add_argument('-output_path', default="EAS_results", type=str)
     parser.add_argument('-norm', default="instance", choices=['instance', 'batch', 'batch_no_track', 'none'], type=str)
