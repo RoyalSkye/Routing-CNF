@@ -6,7 +6,15 @@
 
 The PyTorch Implementation of *NeurIPS 2024 -- [Collaboration! Towards Robust Neural Methods for Routing Problems](https://arxiv.org/pdf/2410.04968)*. This paper improves the robustness of neural VRP solvers through adversarial training, which can also be viewed as enhancing their OOD generalization from the perspective of adversarial robustness (see [ICLR'22](https://openreview.net/forum?id=vJZ7dPIjip3)).
 
+<details>
+    <summary><strong>Overview</strong></summary>
 <p align="center"><img src="./assets/overview.png" width=90%></p>
+</details>
+
+<details>
+    <summary><strong>Poster</strong></summary>
+<p align="center"><img src="./assets/CNF_Poster.png" width=95%></p>
+</details>
 
 ## Dependencies
 
